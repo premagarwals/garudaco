@@ -170,9 +170,9 @@ const Dashboard: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {topics.slice(0, 6).map((topic) => (
               <div key={topic.id} className="glass-card-dark p-4 hover:bg-white/5 transition-all duration-200">
-                <div className="flex items-start justify-between mb-3">
-                  <h3 className="font-semibold text-white truncate">{topic.name}</h3>
-                  <span className={`px-2 py-0.5 rounded text-xs font-medium text-white ${getCategoryColor(topic.category)} shrink-0 ml-2`}>
+                <div className="flex items-start justify-between mb-6 h-12">
+                  <h3 className="font-semibold text-white m-auto">{topic.name}</h3>
+                  <span className={`px-2 w-16 ml-2 flex justify-center items-center rounded-lg text-xs font-medium leading-tight text-white ${getCategoryColor(topic.category)}`}>
                     {topic.category}
                   </span>
                 </div>

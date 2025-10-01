@@ -156,7 +156,7 @@ const Stats: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {Object.entries(stats.categories).map(([category, data]) => (
             <div key={category} className="glass-card-dark p-4">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-6">
                 <span className={`px-3 py-1 rounded-full text-sm text-white ${getCategoryColor(category)}`}>
                   {category}
                 </span>
