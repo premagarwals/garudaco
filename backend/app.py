@@ -74,7 +74,8 @@ def get_mock_response(prompt):
     """Generate mock responses for testing when API key is not available"""
     if "multiple choice" in prompt.lower() or "mcq" in prompt.lower():
         topic = extract_topic_from_prompt(prompt)
-        return f"""QUESTION: What is the time complexity of {topic}?
+        category = extract_category_from_prompt(prompt)
+        return f"""QUESTION: What is the time complexity of {topic} in {category}?
 A) O(1)
 B) O(log n)
 C) O(n)
@@ -84,7 +85,8 @@ EXPLANATION: {topic} typically has O(log n) time complexity due to its divide-an
     
     elif "C++ coding" in prompt or "implement" in prompt.lower():
         topic = extract_topic_from_prompt(prompt)
-        return f"""QUESTION: Implement {topic} in C++
+        category = extract_category_from_prompt(prompt)
+        return f"""QUESTION: Implement {topic} in C++ for {category}
 REQUIREMENTS: Create a function that implements {topic} algorithm
 FUNCTION_SIGNATURE: int search(vector<int>& arr, int target)
 EXAMPLE_INPUT: [1,2,3,4,5], target = 3
@@ -92,7 +94,8 @@ EXAMPLE_OUTPUT: 2"""
     
     elif "fill-in-the-blank" in prompt.lower():
         topic = extract_topic_from_prompt(prompt)
-        return f"""QUESTION: {topic} has a time complexity of _____ in the average case.
+        category = extract_category_from_prompt(prompt)
+        return f"""QUESTION: {topic} in {category} has a time complexity of _____ in the average case.
 ANSWERS: O(log n)|logarithmic|log n
 EXPLANATION: {topic} divides the search space in half with each operation."""
     
@@ -122,9 +125,34 @@ def extract_topic_from_prompt(prompt):
                 return word
         return "Algorithm"
 
-def generate_mcq_question(topic_name):
+def extract_category_from_prompt(prompt):
+    """Extract category from prompt for mock responses"""
+    # Look for category mentions in the prompt
+    if "category" in prompt.lower():
+        # Try to extract the word after "category"
+        words = prompt.split()
+        for i, word in enumerate(words):
+            if word.lower() == "category" and i + 1 < len(words):
+                return words[i + 1].strip(".,")
+    
+    # Default categories based on common patterns
+    if any(term in prompt.lower() for term in ["algorithm", "search", "sort", "tree", "graph"]):
+        return "Algorithms"
+    elif any(term in prompt.lower() for term in ["data structure", "array", "list", "stack", "queue"]):
+        return "Data Structures"
+    elif any(term in prompt.lower() for term in ["system", "design", "architecture"]):
+        return "System Design"
+    else:
+        return "Programming"
+
+def generate_mcq_question(topic_name, category, difficulty):
     """Generate MCQ question for a topic"""
-    prompt = f"""Generate a multiple choice question about {topic_name} in programming/computer science.
+    prompt = f"""Generate a multiple choice question about {topic_name} in the {category} category. 
+    
+Difficulty level: {difficulty:.2f} (0.0 = very easy, 1.0 = very hard)
+Since this is an MCQ question, make it HARD regardless of the difficulty level. Focus on advanced concepts, edge cases, or subtle distinctions.
+
+Don't come up with a common or repeated question.
 
 Format your response EXACTLY like this:
 QUESTION: [Your question here]
@@ -135,13 +163,18 @@ D) [Option D]
 ANSWER: [A/B/C/D]
 EXPLANATION: [Brief explanation]
 
-Make sure the question tests understanding of {topic_name} concept."""
+Make sure the question tests deep understanding of {topic_name} concept in {category}."""
     
     return call_openai_api(prompt)
 
-def generate_code_question(topic_name):
+def generate_code_question(topic_name, category, difficulty):
     """Generate code implementation question for a topic"""
-    prompt = f"""Generate a C++ coding question about {topic_name}.
+    prompt = f"""Generate a C++ coding question about {topic_name} in the {category} category.
+    
+Difficulty level: {difficulty:.2f} (0.0 = very easy, 1.0 = very hard)
+Since this is a coding question, keep it SIMPLE regardless of the difficulty level. Focus on clear, implementable problems that test understanding without being overly complex.
+
+Don't come up with a common or repeated question. Don't focus on DSA. Make question more focused on implementation.
 
 Format your response EXACTLY like this:
 QUESTION: [Your question here - ask to implement a function or algorithm]
@@ -150,20 +183,25 @@ FUNCTION_SIGNATURE: [Provide the exact function signature they should implement]
 EXAMPLE_INPUT: [Example input]
 EXAMPLE_OUTPUT: [Expected output]
 
-The question should test practical implementation of {topic_name} in C++."""
+The question should test practical implementation of {topic_name} in {category} using C++."""
     
     return call_openai_api(prompt)
 
-def generate_blank_question(topic_name):
+def generate_blank_question(topic_name, category, difficulty):
     """Generate fill-in-the-blank question for a topic"""
-    prompt = f"""Generate a fill-in-the-blank question about {topic_name} in programming/computer science.
+    prompt = f"""Generate a fill-in-the-blank question about {topic_name} in the {category} category.
+    
+Difficulty level: {difficulty:.2f} (0.0 = very easy, 1.0 = very hard)
+Since this is a fill-in-the-blank question, make it HARD regardless of the difficulty level. Focus on specific details, precise terminology, or advanced concepts.
+
+Don't come up with a common or repeated question. Try to put only one blank.
 
 Format your response EXACTLY like this:
 QUESTION: [Your question with _____ for blanks]
 ANSWERS: [answer1|answer2|answer3] (multiple valid answers separated by |, case insensitive)
 EXPLANATION: [Brief explanation]
 
-The question should test key concepts of {topic_name}."""
+The question should test key concepts of {topic_name} in {category}."""
     
     return call_openai_api(prompt)
 
@@ -269,17 +307,22 @@ def generate_assessment():
         for rec_json in recommendations:
             rec = json.loads(rec_json)
             topic_name = rec['topic_name']
+            category = rec['category']
+            base_score = rec.get('base_score', 50)  # Default to 50 if not present
+            
+            # Calculate difficulty as (100-base_score)/100
+            difficulty = (100 - base_score) / 100
             
             # Randomly choose question type
             question_type = random.choice(QUESTION_TYPES)
             
-            # Generate question based on type
+            # Generate question based on type, including difficulty and category
             if question_type == 'mcq':
-                question_text = generate_mcq_question(topic_name)
+                question_text = generate_mcq_question(topic_name, category, difficulty)
             elif question_type == 'code':
-                question_text = generate_code_question(topic_name)
+                question_text = generate_code_question(topic_name, category, difficulty)
             else:  # blank
-                question_text = generate_blank_question(topic_name)
+                question_text = generate_blank_question(topic_name, category, difficulty)
             
             question_data = {
                 'rec_id': rec['rec_id'],
