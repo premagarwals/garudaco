@@ -10,7 +10,7 @@ services:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
     env_file:
-      - ./.env
+      - ./.env  # Single .env file in root directory for all services
     restart: unless-stopped
     networks:
       - garudaco-network

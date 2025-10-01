@@ -21,22 +21,18 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# OpenAI API Configuration
+# OpenRouter API Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your-api-key-here')
+API_MODEL = os.getenv('API_MODEL', 'deepseek/deepseek-chat-v3.1:free')
 
-# Check if using OpenRouter (API key starts with sk-or-v1-)
-if OPENAI_API_KEY.startswith('sk-or-v1-'):
-    OPENAI_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-    API_MODEL = "deepseek/deepseek-chat-v3.1:free"  # Default model for OpenRouter
-else:
-    OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-    API_MODEL = "deepseek/deepseek-chat-v3.1:free"  # Default model for OpenAI
+# OpenRouter API URL (we only support OpenRouter)
+OPENAI_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Question types
 QUESTION_TYPES = ['mcq', 'code', 'blank']
 
 def call_openai_api(prompt, temperature=0.7):
-    """Call OpenAI/OpenRouter API with the given prompt"""
+    """Call OpenRouter API with the given prompt"""
     # Check if API key is available
     if OPENAI_API_KEY == 'your-api-key-here' or not OPENAI_API_KEY:
         # Return mock responses for testing
@@ -44,13 +40,10 @@ def call_openai_api(prompt, temperature=0.7):
     
     headers = {
         'Authorization': f'Bearer {OPENAI_API_KEY}',
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'http://localhost:5000',  # Required by OpenRouter
+        'X-Title': 'garudaco Learning Assistant'  # Optional but recommended
     }
-    
-    # Add OpenRouter specific headers if using OpenRouter
-    if OPENAI_API_KEY.startswith('sk-or-v1-'):
-        headers['HTTP-Referer'] = 'http://localhost:5000'  # Required by OpenRouter
-        headers['X-Title'] = 'garudaco Learning Assistant'  # Optional but recommended
     
     data = {
         'model': API_MODEL,

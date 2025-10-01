@@ -22,16 +22,20 @@ That's it! The application will be available at:
 
 ### 🔑 OpenRouter API Setup
 
-1. **Get your OpenRouter API key** from https://openrouter.ai/
+1. **Get your OpenRouter API key** from https://openrouter.ai/ (free tier available)
 2. **Edit the `.env` file** in the **root directory** (same level as docker-compose.yml):
    ```bash
+   # OpenRouter API Configuration
    OPENAI_API_KEY=sk-or-v1-your-actual-api-key-here
+   API_MODEL=deepseek/deepseek-chat-v3.1:free
    ```
 3. **Restart the containers**:
    ```bash
    docker-compose down
-   docker-compose up
+   docker-compose up --build
    ```
+
+📖 **For detailed setup instructions and model options**, see [OPENAI_SETUP.md](OPENAI_SETUP.md)
 
 ### 🗄️ Fresh Start
 
@@ -75,7 +79,7 @@ The Docker setup automatically creates fresh, empty data files on first run:
 ### Backend
 - **Python Flask**: REST API server
 - **JSON Storage**: Persistent data storage in JSON files
-- **OpenAI API Integration**: AI-powered question generation and code verification
+- **OpenRouter API Integration**: AI-powered question generation and code verification
 - **CORS Support**: Cross-origin resource sharing for frontend communication
 
 ### Frontend
@@ -91,7 +95,7 @@ The Docker setup automatically creates fresh, empty data files on first run:
 ### Prerequisites
 - Node.js (v14 or higher)
 - Python (v3.7 or higher)
-- OpenAI API key (for question generation)
+- OpenRouter API key (for AI question generation - free tier available)
 
 ### Backend Setup
 
@@ -105,9 +109,11 @@ cd garudaco/backend
 pip install -r requirements.txt
 ```
 
-3. Set your OpenAI API key as an environment variable:
+3. Configure your OpenRouter API settings in the root `.env` file:
 ```bash
-export OPENAI_API_KEY="your-api-key-here"
+# Edit the .env file in the project root
+OPENAI_API_KEY="sk-or-v1-your-api-key-here"
+API_MODEL="deepseek/deepseek-chat-v3.1:free"
 ```
 
 4. Start the Flask server:
@@ -154,9 +160,10 @@ The engine uses a sophisticated scoring system that considers:
 - **Category Diversity**: Prevents clustering of similar topics
 
 ### 3. Question Generation
-- **AI-Powered**: Uses OpenAI's API to generate contextual questions
+- **AI-Powered**: Uses OpenRouter's API to generate contextual questions
 - **Format-Specific**: Different prompts for MCQ, code, and fill-in-blank questions
 - **Verification**: Code solutions are verified by AI for correctness
+- **Configurable Models**: Support for multiple AI models with different capabilities
 
 ## API Endpoints
 
