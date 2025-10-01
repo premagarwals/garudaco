@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Topic, Assessment, AssessmentResult, Stats } from '../types';
+import { Topic, Assessment, AssessmentResult, Stats, AssessmentFilters } from '../types';
 
 const API_BASE_URL = 'http://localhost:5000/api';
 
@@ -22,9 +22,27 @@ export const apiService = {
     return response.data.message;
   },
 
+  getCategories: async (): Promise<string[]> => {
+    const response = await api.get('/categories');
+    return response.data;
+  },
+
   // Assessment
-  generateAssessment: async (count: number): Promise<Assessment> => {
-    const response = await api.post('/generate-assessment', { count });
+  generateAssessment: async (count: number, filters?: AssessmentFilters): Promise<Assessment> => {
+    const response = await api.post('/generate-assessment', { count, ...filters });
+    return response.data;
+  },
+
+  generateAssessmentAdvanced: async (
+    count: number, 
+    sortBy: string, 
+    sortOrder: string
+  ): Promise<Assessment & { sort_info: { sort_by: string; sort_order: string; description: string } }> => {
+    const response = await api.post('/generate-assessment-advanced', { 
+      count, 
+      sort_by: sortBy, 
+      sort_order: sortOrder 
+    });
     return response.data;
   },
 

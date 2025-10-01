@@ -289,17 +289,61 @@ def add_topic():
     result = add_new_topic(name, category, difficulty)
     return jsonify({'message': result})
 
+@app.route('/api/categories', methods=['GET'])
+def get_categories():
+    """Get all unique categories from topics"""
+    topics = fetch_all_topics()
+    categories = list(set(topic.get('category', '').strip() for topic in topics if topic.get('category', '').strip()))
+    categories.sort()  # Sort alphabetically
+    return jsonify(categories)
+
 @app.route('/api/generate-assessment', methods=['POST'])
 def generate_assessment():
     """Generate assessment questions based on filters"""
     data = request.get_json()
     count = data.get('count', 3)
     
-    # Get recommendations from engine
+    # Extract filters from request
+    filters = {}
+    
+    if 'added_in_last_days' in data and data['added_in_last_days'] is not None:
+        try:
+            filters['added_in_last_days'] = int(data['added_in_last_days'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'added_in_last_days must be a valid number'}), 400
+    
+    if 'not_asked_in_last_days' in data and data['not_asked_in_last_days'] is not None:
+        try:
+            filters['not_asked_in_last_days'] = int(data['not_asked_in_last_days'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'not_asked_in_last_days must be a valid number'}), 400
+    
+    if 'min_base_score' in data and data['min_base_score'] is not None:
+        try:
+            min_score = int(data['min_base_score'])
+            if not (1 <= min_score <= 100):
+                return jsonify({'error': 'min_base_score must be between 1 and 100'}), 400
+            filters['min_base_score'] = min_score
+        except (ValueError, TypeError):
+            return jsonify({'error': 'min_base_score must be a valid number'}), 400
+    
+    if 'categories' in data and data['categories']:
+        if isinstance(data['categories'], list):
+            # Filter out empty strings and None values
+            categories = [cat.strip() for cat in data['categories'] if cat and cat.strip()]
+            if categories:
+                filters['categories'] = categories
+        else:
+            return jsonify({'error': 'categories must be a list of strings'}), 400
+    
+    # Get recommendations from engine with filters
     try:
-        recommendations = get_recommendations(count)
+        recommendations = get_recommendations(count, filters if filters else None)
         if not recommendations:
-            return jsonify({'error': 'No topics available for assessment'}), 400
+            if filters:
+                return jsonify({'error': 'No topics match the specified filters'}), 400
+            else:
+                return jsonify({'error': 'No topics available for assessment'}), 400
         
         # Parse recommendations and generate questions
         assessment_questions = []
@@ -347,6 +391,93 @@ def generate_assessment():
         
     except Exception as e:
         return jsonify({'error': f'Failed to generate assessment: {str(e)}'}), 500
+
+@app.route('/api/generate-assessment-advanced', methods=['POST'])
+def generate_assessment_advanced():
+    """Generate assessment questions based on advanced sorting criteria"""
+    data = request.get_json()
+    count = data.get('count', 3)
+    sort_by = data.get('sort_by', 'success_rate')
+    sort_order = data.get('sort_order', 'top')
+    
+    # Validate sort_by parameter
+    valid_sort_options = ['success_rate', 'attempt_count', 'base_score', 'last_seen', 'date_added']
+    if sort_by not in valid_sort_options:
+        return jsonify({'error': f'sort_by must be one of: {", ".join(valid_sort_options)}'}), 400
+    
+    # Validate sort_order parameter
+    if sort_order not in ['top', 'bottom']:
+        return jsonify({'error': 'sort_order must be either "top" or "bottom"'}), 400
+    
+    # Validate count
+    try:
+        count = int(count)
+        if count <= 0:
+            return jsonify({'error': 'count must be a positive integer'}), 400
+    except (ValueError, TypeError):
+        return jsonify({'error': 'count must be a valid number'}), 400
+    
+    # Get sorted recommendations from engine
+    try:
+        from engine import get_sorted_recommendations
+        recommendations = get_sorted_recommendations(count, sort_by, sort_order)
+        
+        if not recommendations:
+            return jsonify({'error': 'No topics available for assessment'}), 400
+        
+        # Parse recommendations and generate questions
+        assessment_questions = []
+        
+        for rec_json in recommendations:
+            rec = json.loads(rec_json)
+            topic_name = rec['topic_name']
+            category = rec['category']
+            base_score = rec.get('base_score', 50)
+            
+            # Calculate difficulty as (100-base_score)/100
+            difficulty = (100 - base_score) / 100
+            
+            # Randomly choose question type
+            question_type = random.choice(QUESTION_TYPES)
+            
+            # Generate question based on type, including difficulty and category
+            if question_type == 'mcq':
+                question_text = generate_mcq_question(topic_name, category, difficulty)
+            elif question_type == 'code':
+                question_text = generate_code_question(topic_name, category, difficulty)
+            else:  # blank
+                question_text = generate_blank_question(topic_name, category, difficulty)
+            
+            question_data = {
+                'rec_id': rec['rec_id'],
+                'set_id': rec['set_id'],
+                'rec_no': rec['rec_no'],
+                'topic_id': rec['topic_id'],
+                'topic_name': topic_name,
+                'category': rec['category'],
+                'question_type': question_type,
+                'question_text': question_text,
+                'user_answer': None,
+                'is_correct': None,
+                'difficulty_rating': None,
+                'sort_criteria': rec.get('sort_criteria', ''),
+                'sort_value': rec.get('sort_value', 0)
+            }
+            
+            assessment_questions.append(question_data)
+        
+        return jsonify({
+            'set_id': json.loads(recommendations[0])['set_id'],
+            'questions': assessment_questions,
+            'sort_info': {
+                'sort_by': sort_by,
+                'sort_order': sort_order,
+                'description': f"{'Top' if sort_order == 'top' else 'Bottom'} {count} topics by {sort_by.replace('_', ' ')}"
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to generate advanced assessment: {str(e)}'}), 500
 
 @app.route('/api/verify-code', methods=['POST'])
 def verify_code():

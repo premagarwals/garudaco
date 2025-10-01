@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle, XCircle, Code, Play, ArrowRight, BookOpen } from 'lucide-react';
+import { CheckCircle, XCircle, Code, Play, ArrowRight, BookOpen, Filter, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import Editor from '@monaco-editor/react';
-import { Assessment as AssessmentType, AssessmentResult, MCQOptions } from '../types';
+import { Assessment as AssessmentType, AssessmentResult, MCQOptions, AssessmentFilters } from '../types';
 import { apiService } from '../services/api';
 
 const Assessment: React.FC = () => {
@@ -28,13 +28,71 @@ int main() {
   const [isSubmitting] = useState(false);
   const [questionCount, setQuestionCount] = useState(3);
   const [isGenerating, setIsGenerating] = useState(false);
+  
+  // Filter states
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<AssessmentFilters>({});
+  const [availableCategories, setAvailableCategories] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  
+  // Advanced filtering states
+  const [useAdvancedMode, setUseAdvancedMode] = useState(false);
+  const [sortBy, setSortBy] = useState<string>('success_rate');
+  const [sortOrder, setSortOrder] = useState<string>('bottom');
+  const [sortInfo, setSortInfo] = useState<any>(null);
+
+  // Fetch available categories on component mount
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const categories = await apiService.getCategories();
+        setAvailableCategories(categories);
+      } catch (error) {
+        console.error('Error fetching categories:', error);
+      }
+    };
+    fetchCategories();
+  }, []);
 
   const currentQuestion = assessment?.questions[currentQuestionIndex];
 
   const startAssessment = async () => {
     setIsGenerating(true);
     try {
-      const assessmentData = await apiService.generateAssessment(questionCount);
+      let assessmentData;
+      
+      if (useAdvancedMode) {
+        // Use advanced sorting mode
+        const response = await apiService.generateAssessmentAdvanced(questionCount, sortBy, sortOrder);
+        assessmentData = response;
+        setSortInfo(response.sort_info);
+      } else {
+        // Use normal priority-based mode with filters
+        const assessmentFilters: AssessmentFilters = {};
+        
+        if (filters.added_in_last_days !== undefined && filters.added_in_last_days !== null && filters.added_in_last_days > 0) {
+          assessmentFilters.added_in_last_days = filters.added_in_last_days;
+        }
+        
+        if (filters.not_asked_in_last_days !== undefined && filters.not_asked_in_last_days !== null && filters.not_asked_in_last_days > 0) {
+          assessmentFilters.not_asked_in_last_days = filters.not_asked_in_last_days;
+        }
+        
+        if (filters.min_base_score !== undefined && filters.min_base_score !== null && filters.min_base_score > 0) {
+          assessmentFilters.min_base_score = filters.min_base_score;
+        }
+        
+        if (selectedCategories.length > 0) {
+          assessmentFilters.categories = selectedCategories;
+        }
+        
+        assessmentData = await apiService.generateAssessment(
+          questionCount, 
+          Object.keys(assessmentFilters).length > 0 ? assessmentFilters : undefined
+        );
+        setSortInfo(null);
+      }
+      
       setAssessment(assessmentData);
       setPhase('assessment');
       setCurrentQuestionIndex(0);
@@ -494,6 +552,185 @@ int main() {
               </select>
             </div>
 
+            {/* Filter Toggle */}
+            <div className="pt-6">
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className="flex items-center cursor-pointer filter"
+              >
+                <Filter className="w-4 h-4" />
+                <span>Advanced Filters</span>
+                {showFilters && <X className="w-4 h-4" />}
+              </button>
+            </div>
+
+            {/* Filter Options */}
+            {showFilters && (
+              <div className="space-y-4 bg-white/5 p-4 rounded-lg border border-white/10">
+                {/* Mode Selection */}
+                <div className="border-b border-white/20 pb-4">
+                  <label className="block text-sm font-medium text-gray-300 mb-3">
+                    Selection Mode
+                  </label>
+                  <div className="space-y-2 p-4">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="mode"
+                        checked={!useAdvancedMode}
+                        onChange={() => setUseAdvancedMode(false)}
+                        className="text-blue-500 focus:ring-blue-500"
+                      />
+                      <span className="text-gray-300">Smart Priority (Recommended)</span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="mode"
+                        checked={useAdvancedMode}
+                        onChange={() => setUseAdvancedMode(true)}
+                        className="text-blue-500 focus:ring-blue-500"
+                      />
+                      <span className="text-gray-300">Advanced Sorting</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Advanced Mode Options */}
+                {useAdvancedMode && (
+                  <div className="space-y-4 bg-blue-500/10 p-4 rounded-lg border border-blue-500/20">
+                    <h4 className="text-sm font-medium text-blue-300">Advanced Sorting Options</h4>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Sort By
+                      </label>
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="success_rate" className="bg-gray-800">Success Rate</option>
+                        <option value="attempt_count" className="bg-gray-800">Attempt Count</option>
+                        <option value="base_score" className="bg-gray-800">Difficulty Score</option>
+                        <option value="last_seen" className="bg-gray-800">Last Seen</option>
+                        <option value="date_added" className="bg-gray-800">Date Added</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Sort Order
+                      </label>
+                      <select
+                        value={sortOrder}
+                        onChange={(e) => setSortOrder(e.target.value)}
+                        className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="top" className="bg-gray-800">
+                          {sortBy === 'last_seen' || sortBy === 'date_added' ? 'Most Recent' : 'Highest'}
+                        </option>
+                        <option value="bottom" className="bg-gray-800">
+                          {sortBy === 'last_seen' || sortBy === 'date_added' ? 'Oldest' : 'Lowest'}
+                        </option>
+                      </select>
+                    </div>
+
+                    <div className="text-xs text-blue-300 bg-blue-500/10 p-3 rounded">
+                      <strong>Current Selection:</strong> {
+                        sortOrder === 'top' 
+                          ? (sortBy === 'last_seen' || sortBy === 'date_added' ? 'Most recent' : 'Top') 
+                          : (sortBy === 'last_seen' || sortBy === 'date_added' ? 'Oldest' : 'Bottom')
+                      } topics by {sortBy.replace('_', ' ')}
+                    </div>
+                  </div>
+                )}
+
+                {/* Regular Filters (only shown in smart priority mode) */}
+                {!useAdvancedMode && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Topics Added in Last X Days (leave empty for all)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="e.g. 7"
+                        value={filters.added_in_last_days || ''}
+                        onChange={(e) => setFilters({...filters, added_in_last_days: e.target.value ? parseInt(e.target.value) : undefined})}
+                        className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Topics Not Asked in Last X Days (leave empty for all)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="e.g. 3"
+                        value={filters.not_asked_in_last_days || ''}
+                        onChange={(e) => setFilters({...filters, not_asked_in_last_days: e.target.value ? parseInt(e.target.value) : undefined})}
+                        className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Minimum Difficulty Score (1-100, leave empty for all)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        placeholder="e.g. 50"
+                        value={filters.min_base_score || ''}
+                        onChange={(e) => setFilters({...filters, min_base_score: e.target.value ? parseInt(e.target.value) : undefined})}
+                        className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Categories (select multiple or leave empty for all)
+                      </label>
+                      <div className="space-y-2 max-h-32 overflow-y-auto">
+                        {availableCategories.map((category) => (
+                          <label key={category} className="flex items-center space-x-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedCategories.includes(category)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedCategories([...selectedCategories, category]);
+                                } else {
+                                  setSelectedCategories(selectedCategories.filter(c => c !== category));
+                                }
+                              }}
+                              className="rounded border-white/20 bg-white/10 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                            />
+                            <span className="text-gray-300 text-sm">{category}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-gray-400 bg-white/5 p-3 rounded">
+                      <strong>Filter Tips:</strong>
+                      <ul className="mt-1 space-y-1">
+                        <li>• Use "Added in Last X Days" to focus on recently added topics</li>
+                        <li>• Use "Not Asked in Last X Days" to review topics you haven't practiced</li>
+                        <li>• Use "Minimum Difficulty" to focus on harder topics (higher numbers)</li>
+                        <li>• Select specific categories to focus your practice</li>
+                      </ul>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             <button
               onClick={startAssessment}
               disabled={isGenerating}
@@ -545,14 +782,20 @@ int main() {
             </span>
           </div>
           <div className="mt-2 w-full bg-gray-700 rounded-full h-2">
-            <div 
-              className="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full transition-all duration-300"
-              style={{ width: `${((currentQuestionIndex + 1) / assessment.questions.length) * 100}%` }}
-            ></div>
+            <div
+              className="bg-gradient-to-r from-green-500 to-blue-600 h-2 rounded-full transition-all duration-300"
+              style={{
+                width: `${((currentQuestionIndex + 1) / assessment.questions.length) * 100}%`,
+              }}
+            />
           </div>
-        </div>
-
-        {/* Question */}
+          {/* Sort Info for Advanced Mode */}
+          {sortInfo && (
+            <div className="mt-3 text-xs text-blue-300 bg-blue-500/10 px-3 py-2 rounded">
+              <span className="font-medium">Selection Mode:</span> {sortInfo.description}
+            </div>
+          )}
+        </div>        {/* Question */}
         {currentQuestion.question_type === 'mcq' && renderMCQQuestion()}
         {currentQuestion.question_type === 'blank' && renderBlankQuestion()}
         {currentQuestion.question_type === 'code' && renderCodeQuestion()}

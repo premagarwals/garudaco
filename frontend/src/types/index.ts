@@ -39,6 +39,24 @@ export interface AssessmentResult {
   difficulty_rating: 'easy' | 'medium' | 'hard';
 }
 
+export interface AssessmentFilters {
+  added_in_last_days?: number;
+  not_asked_in_last_days?: number;
+  min_base_score?: number;
+  categories?: string[];
+}
+
+export interface AdvancedAssessmentOptions {
+  sort_by: 'success_rate' | 'attempt_count' | 'base_score' | 'last_seen' | 'date_added';
+  sort_order: 'top' | 'bottom';
+}
+
+export interface SortInfo {
+  sort_by: string;
+  sort_order: string;
+  description: string;
+}
+
 export interface MCQOptions {
   A: string;
   B: string;

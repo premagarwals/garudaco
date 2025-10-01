@@ -8,6 +8,18 @@
   color: #e5e7eb;
 }
 
+.filter {
+  background-color: #2563eb;
+  color: white;
+  cursor: pointer;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 2rem;
+  gap: 10px;
+}
+.filter:hover{
+  color: #c3d5ff;
+}
 .prose-invert h1, .prose-invert h2, .prose-invert h3, .prose-invert h4, .prose-invert h5, .prose-invert h6 {
   color: #f9fafb;
   font-weight: 600;

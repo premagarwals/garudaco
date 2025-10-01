@@ -339,13 +339,81 @@ def _weighted_sample_without_replacement(items: List[dict], k: int, category_key
     return chosen
 
 
+# --------------------------- Filtering functions -------------------------------------------
+def filter_topics(topics: List[dict], filters: Dict = None) -> List[dict]:
+    """
+    Filter topics based on provided criteria.
+    
+    filters dict can contain:
+    - added_in_last_days: int - only topics added in last X days
+    - not_asked_in_last_days: int - only topics not asked in last X days  
+    - min_base_score: int - only topics with base_score >= X
+    - categories: List[str] - only topics from specified categories
+    """
+    if not filters:
+        return topics
+    
+    now = datetime.utcnow()
+    filtered = topics.copy()
+    
+    # Filter by topics added in last X days
+    if 'added_in_last_days' in filters:
+        days_limit = filters['added_in_last_days']
+        filtered = [
+            t for t in filtered 
+            if t.get('date_added') and 
+            days_since(t['date_added'], now) is not None and 
+            days_since(t['date_added'], now) <= days_limit
+        ]
+    
+    # Filter by topics not asked in last X days
+    if 'not_asked_in_last_days' in filters:
+        days_limit = filters['not_asked_in_last_days']
+        filtered = [
+            t for t in filtered 
+            if not t.get('last_seen') or 
+            days_since(t['last_seen'], now) is None or 
+            days_since(t['last_seen'], now) >= days_limit
+        ]
+    
+    # Filter by minimum base score
+    if 'min_base_score' in filters:
+        min_score = filters['min_base_score']
+        filtered = [
+            t for t in filtered 
+            if t.get('base_score', 50) >= min_score
+        ]
+    
+    # Filter by categories
+    if 'categories' in filters and filters['categories']:
+        categories = [cat.lower() for cat in filters['categories']]
+        filtered = [
+            t for t in filtered 
+            if t.get('category', '').lower() in categories
+        ]
+    
+    return filtered
+
+
 # --------------------------- Main API functions --------------------------------------------
-def get_recommendations(count: int) -> List[str]:
+def get_recommendations(count: int, filters: Dict = None) -> List[str]:
     """
     Returns a list of JSON strings; each string is a recommendation.
+    
+    filters dict can contain:
+    - added_in_last_days: int - only topics added in last X days
+    - not_asked_in_last_days: int - only topics not asked in last X days  
+    - min_base_score: int - only topics with base_score >= X
+    - categories: List[str] - only topics from specified categories
     """
     now = datetime.utcnow()
     topics = fetch_all_topics()
+    
+    # Apply filters before computing priorities
+    topics = filter_topics(topics, filters)
+    
+    if not topics:
+        return []  # No topics match the filters
 
     # compute priorities
     scored = []
@@ -452,6 +520,108 @@ def flag_recommendation_set(
         _persist_topic_update(topic_id, updates)
 
     return f"Successfully processed feedback for {len(feedback)} recommendations in set '{set_id}'. Topic data updated."
+
+
+# --------------------------- Advanced Filtering with Sorting -----------------------------------
+def get_sorted_recommendations(count: int, sort_by: str, sort_order: str = 'top') -> List[str]:
+    """
+    Get recommendations based on sorting criteria without priority calculations.
+    
+    Args:
+        count: Number of topics to return
+        sort_by: Sort criteria - 'success_rate', 'attempt_count', 'base_score', 'last_seen', 'date_added'
+        sort_order: 'top' for highest/most recent, 'bottom' for lowest/oldest
+    
+    Returns:
+        List of JSON strings representing recommendations
+    """
+    now = datetime.utcnow()
+    topics = fetch_all_topics()
+    
+    if not topics:
+        return []
+    
+    # Calculate success rate for each topic
+    for topic in topics:
+        attempts = topic.get('attempts', 0)
+        successes = topic.get('successes', 0)
+        topic['success_rate'] = (successes / attempts * 100) if attempts > 0 else 0
+        
+        # Calculate days since last seen for sorting
+        last_seen = topic.get('last_seen')
+        if last_seen:
+            topic['days_since_last_seen'] = days_since(last_seen, now) or 0
+        else:
+            topic['days_since_last_seen'] = 999999  # Never seen
+            
+        # Calculate days since added
+        date_added = topic.get('date_added', now)
+        topic['days_since_added'] = days_since(date_added, now) or 0
+    
+    # Sort based on criteria
+    reverse = sort_order == 'top'
+    
+    if sort_by == 'success_rate':
+        topics.sort(key=lambda x: x['success_rate'], reverse=reverse)
+    elif sort_by == 'attempt_count':
+        topics.sort(key=lambda x: x.get('attempts', 0), reverse=reverse)
+    elif sort_by == 'base_score':
+        topics.sort(key=lambda x: x.get('base_score', 50), reverse=reverse)
+    elif sort_by == 'last_seen':
+        # For last_seen, 'top' means most recently seen (smallest days_since_last_seen)
+        topics.sort(key=lambda x: x['days_since_last_seen'], reverse=not reverse)
+    elif sort_by == 'date_added':
+        # For date_added, 'top' means most recently added (smallest days_since_added)
+        topics.sort(key=lambda x: x['days_since_added'], reverse=not reverse)
+    else:
+        # Default to base_score if invalid sort_by
+        topics.sort(key=lambda x: x.get('base_score', 50), reverse=reverse)
+    
+    # Take the top/bottom count
+    selected_topics = topics[:count]
+    
+    # Create set_id and generate recommendations
+    set_id = uuid.uuid4().hex
+    _persist_recommendation_set(set_id, selected_topics)
+    
+    output = []
+    for i, topic in enumerate(selected_topics, start=1):
+        rec_id = f"{set_id}-{i}"
+        rec = {
+            "rec_id": rec_id,
+            "set_id": set_id,
+            "rec_no": i,
+            "topic_id": topic["id"],
+            "topic_name": topic["name"],
+            "category": topic.get("category"),
+            "base_score": topic.get("base_score", 50),
+            "success_rate": round(topic['success_rate'], 2),
+            "attempts": topic.get('attempts', 0),
+            "sort_criteria": f"{sort_by}_{sort_order}",
+            "sort_value": _get_sort_value(topic, sort_by)
+        }
+        output.append(json.dumps(rec))
+    
+    # Save the last set ID
+    _save_last_set_id(set_id)
+    
+    return output
+
+
+def _get_sort_value(topic: dict, sort_by: str) -> float:
+    """Get the actual value used for sorting for display purposes."""
+    if sort_by == 'success_rate':
+        return topic['success_rate']
+    elif sort_by == 'attempt_count':
+        return topic.get('attempts', 0)
+    elif sort_by == 'base_score':
+        return topic.get('base_score', 50)
+    elif sort_by == 'last_seen':
+        return topic['days_since_last_seen']
+    elif sort_by == 'date_added':
+        return topic['days_since_added']
+    else:
+        return 0
 
 
 # --------------------------- Interactive CLI (Demo) ------------------------------------------
