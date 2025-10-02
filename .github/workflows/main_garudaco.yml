@@ -8,6 +8,8 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'backend/**'  # Only trigger when backend files change
   workflow_dispatch:
 
 jobs:
@@ -22,25 +24,36 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.11'  # Changed to 3.11 for better compatibility
 
       - name: Create and start virtual environment
+        working-directory: ./backend  # Set working directory to backend
         run: |
           python -m venv venv
           source venv/bin/activate
       
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        working-directory: ./backend  # Set working directory to backend
+        run: |
+          source venv/bin/activate
+          pip install -r requirements.txt
         
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
+      # - name: Run tests
+      #   working-directory: ./backend
+      #   run: |
+      #     source venv/bin/activate
+      #     python -m pytest
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
           path: |
-            .
-            !venv/
+            backend/
+            !backend/venv/
+            !backend/__pycache__/
+            !backend/*.pyc
 
   deploy:
     runs-on: ubuntu-latest
@@ -68,4 +81,4 @@ jobs:
         with:
           app-name: 'garudaco'
           slot-name: 'Production'
-          
+          package: './backend'  # Deploy only the backend directory
