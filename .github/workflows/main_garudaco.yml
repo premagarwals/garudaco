@@ -82,3 +82,4 @@ jobs:
           app-name: 'garudaco'
           slot-name: 'Production'
           package: './backend'  # Deploy only the backend directory
+
