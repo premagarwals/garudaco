@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 class UserDataManager:
     """Manages user-specific data storage and retrieval"""
     
-    def __init__(self, base_dir: str = "user_data"):
+    def __init__(self, base_dir: str = "data"):
         self.base_dir = base_dir
         self.ensure_base_dir()
     
