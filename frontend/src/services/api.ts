@@ -1,7 +1,8 @@
 import axios from 'axios';
 import { Topic, Assessment, AssessmentResult, Stats, AssessmentFilters } from '../types';
+import { authService } from './auth';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -10,6 +11,36 @@ const api = axios.create({
   },
 });
 
+// Add request interceptor to include auth token
+api.interceptors.request.use(
+  (config) => {
+    try {
+      const authHeaders = authService.getAuthHeaders();
+      Object.assign(config.headers, authHeaders);
+    } catch (error) {
+      // If not authenticated, let the request proceed without auth headers
+      // The backend will return 401 if auth is required
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor to handle auth errors
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (error.response?.status === 401) {
+      // Token is invalid or expired, redirect to login
+      await authService.logout();
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const apiService = {
   // Topics
   getTopics: async (): Promise<Topic[]> => {
@@ -17,8 +48,8 @@ export const apiService = {
     return response.data;
   },
 
-  addTopic: async (name: string, category: string, difficulty: number): Promise<string> => {
-    const response = await api.post('/topics', { name, category, difficulty });
+  addTopic: async (topic_name: string, category: string, base_score: number): Promise<string> => {
+    const response = await api.post('/topics', { topic_name, category, base_score });
     return response.data.message;
   },
 

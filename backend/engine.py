@@ -4,6 +4,7 @@ import random
 import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Tuple
+from user_manager import user_data_manager
 
 # --------------------------- Configuration (final, tuned weights) ---------------------------
 # These weights were chosen to prioritise: (1) struggle (user failing), (2) due/spacing, (3) inherent difficulty,
@@ -31,29 +32,371 @@ FLAG_SCORE_MAP = {
     "medium": 50,
     "hard": 80
 }
+# --------------------------- User-based Data Functions ----------------------------------
 
-# --------------------------- JSON Data Storage & Persistence ----------------------------------
+def fetch_all_topics(user_id: str) -> List[dict]:
+    """Fetch all topics for a specific user"""
+    return user_data_manager.load_user_topics(user_id)
 
-# File paths for JSON storage
-TOPICS_DATA_FILE = "topics_data.json"
-RECOMMENDATION_SETS_FILE = "recommendation_sets.json"
-LAST_SET_ID_FILE = "last_set_id.json"
+def add_new_topic(user_id: str, name: str, category: str, difficulty: int) -> str:
+    """Add a new topic for a specific user"""
+    topics = user_data_manager.load_user_topics(user_id)
+    
+    # Check if topic already exists
+    for topic in topics:
+        if topic['topic_name'].lower() == name.lower():
+            return f"Topic '{name}' already exists"
+    
+    new_topic = {
+        'topic_id': str(uuid.uuid4()),
+        'topic_name': name,
+        'category': category,
+        'base_score': difficulty,
+        'attempts': 0,
+        'successes': 0,
+        'date_added': datetime.now(),
+        'last_seen': None
+    }
+    
+    topics.append(new_topic)
+    user_data_manager.save_user_topics(user_id, topics)
+    
+    # Update user profile
+    profile = user_data_manager.load_user_profile(user_id)
+    profile['total_topics_added'] = profile.get('total_topics_added', 0) + 1
+    user_data_manager.save_user_profile(user_id, profile)
+    
+    return f"Topic '{name}' added successfully"
 
-def _load_topics_data() -> List[dict]:
-    """Load topics data from JSON file."""
-    try:
-        with open(TOPICS_DATA_FILE, 'r') as f:
-            data = json.load(f)
-            # Convert datetime strings back to datetime objects
-            for topic in data:
-                if topic.get('date_added'):
-                    topic['date_added'] = datetime.fromisoformat(topic['date_added'])
-                if topic.get('last_seen'):
-                    topic['last_seen'] = datetime.fromisoformat(topic['last_seen'])
-            return data
-    except (FileNotFoundError, json.JSONDecodeError):
-        # Return initial data if file doesn't exist or is corrupted
-        return _get_initial_topics_data()
+def get_recommendations(user_id: str, count: int, filters: Optional[Dict] = None) -> List[str]:
+    """Get topic recommendations for a specific user using the spaced repetition algorithm"""
+    topics = user_data_manager.load_user_topics(user_id)
+    
+    if not topics:
+        return []
+    
+    # Apply filters if provided
+    if filters:
+        topics = apply_filters(topics, filters)
+    
+    if len(topics) == 0:
+        return []
+    
+    # Calculate priorities for each topic
+    prioritized_topics = []
+    for topic in topics:
+        priority = calculate_priority(topic, topics)
+        prioritized_topics.append((topic, priority))
+    
+    # Sort by priority (highest first)
+    prioritized_topics.sort(key=lambda x: x[1], reverse=True)
+    
+    # Apply diversity penalty and select topics
+    selected_topics = []
+    used_categories = set()
+    
+    for topic, priority in prioritized_topics:
+        if len(selected_topics) >= count:
+            break
+        
+        # Apply diversity penalty if category already used
+        if topic['category'] in used_categories:
+            priority *= DIVERSITY_PENALTY
+        
+        selected_topics.append(topic)
+        used_categories.add(topic['category'])
+        
+        # If we need more topics and have exhausted unique categories, allow repeats
+        if len(selected_topics) < count and len(used_categories) == len(set(t['category'] for t in topics)):
+            used_categories.clear()
+    
+    # Create assessment set and store current assessment
+    set_id = f"set_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(1000, 9999)}"
+    
+    # Store current assessment for feedback processing
+    assessment_data = {
+        'set_id': set_id,
+        'topics': selected_topics,
+        'timestamp': datetime.now()
+    }
+    user_data_manager.save_user_current_assessment(user_id, assessment_data)
+    
+    # Format recommendations as JSON strings (maintaining compatibility)
+    recommendations = []
+    for i, topic in enumerate(selected_topics):
+        rec = {
+            'rec_id': f"{set_id}_{i}",
+            'set_id': set_id,
+            'rec_no': i,
+            'topic_id': topic['topic_id'],
+            'topic_name': topic['topic_name'],
+            'category': topic['category'],
+            'base_score': topic['base_score']
+        }
+        recommendations.append(json.dumps(rec))
+    
+    return recommendations
+
+def get_sorted_recommendations(user_id: str, count: int, sort_by: str, sort_order: str) -> List[str]:
+    """Get sorted topic recommendations for a specific user"""
+    topics = user_data_manager.load_user_topics(user_id)
+    
+    if not topics:
+        return []
+    
+    # Add computed fields for sorting
+    enriched_topics = []
+    for topic in topics:
+        attempts = topic.get('attempts', 0)
+        successes = topic.get('successes', 0)
+        success_rate = (successes / attempts * 100) if attempts > 0 else 0
+        
+        days_since_last_seen = 999
+        if topic.get('last_seen'):
+            days_since_last_seen = (datetime.now() - topic['last_seen']).days
+        
+        days_since_added = (datetime.now() - topic['date_added']).days
+        
+        enriched_topic = topic.copy()
+        enriched_topic.update({
+            'success_rate': success_rate,
+            'attempt_count': attempts,
+            'days_since_last_seen': days_since_last_seen,
+            'days_since_added': days_since_added
+        })
+        enriched_topics.append(enriched_topic)
+    
+    # Sort based on criteria
+    if sort_by == 'success_rate':
+        enriched_topics.sort(key=lambda x: x['success_rate'], reverse=(sort_order == 'top'))
+    elif sort_by == 'attempt_count':
+        enriched_topics.sort(key=lambda x: x['attempt_count'], reverse=(sort_order == 'top'))
+    elif sort_by == 'base_score':
+        enriched_topics.sort(key=lambda x: x['base_score'], reverse=(sort_order == 'top'))
+    elif sort_by == 'last_seen':
+        enriched_topics.sort(key=lambda x: x['days_since_last_seen'], reverse=(sort_order == 'bottom'))
+    elif sort_by == 'date_added':
+        enriched_topics.sort(key=lambda x: x['days_since_added'], reverse=(sort_order == 'bottom'))
+    
+    # Take the requested count
+    selected_topics = enriched_topics[:count]
+    
+    # Create assessment set and store current assessment
+    set_id = f"sorted_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(1000, 9999)}"
+    
+    # Store current assessment for feedback processing
+    assessment_data = {
+        'set_id': set_id,
+        'topics': selected_topics,
+        'timestamp': datetime.now(),
+        'sort_criteria': {
+            'sort_by': sort_by,
+            'sort_order': sort_order
+        }
+    }
+    user_data_manager.save_user_current_assessment(user_id, assessment_data)
+    
+    # Format recommendations as JSON strings
+    recommendations = []
+    for i, topic in enumerate(selected_topics):
+        rec = {
+            'rec_id': f"{set_id}_{i}",
+            'set_id': set_id,
+            'rec_no': i,
+            'topic_id': topic['topic_id'],
+            'topic_name': topic['topic_name'],
+            'category': topic['category'],
+            'base_score': topic['base_score'],
+            'sort_criteria': f"{sort_by} ({sort_order})",
+            'sort_value': get_sort_value(topic, sort_by)
+        }
+        recommendations.append(json.dumps(rec))
+    
+    return recommendations
+
+def flag_recommendation_set(user_id: str, set_id: str, feedback: List[Dict]) -> str:
+    """Process feedback for the current assessment set"""
+    # Get current assessment
+    assessment = user_data_manager.load_user_current_assessment(user_id)
+    
+    if not assessment or assessment['set_id'] != set_id:
+        return "No matching assessment found or assessment expired"
+    
+    # Load current topics
+    topics = user_data_manager.load_user_topics(user_id)
+    
+    # Process feedback for each topic
+    for fb in feedback:
+        rec_no = fb['rec_no']
+        difficulty = fb['difficulty']  # 'easy', 'medium', 'hard'
+        solved = fb['solved']  # True/False
+        
+        if rec_no >= len(assessment['topics']):
+            continue
+        
+        assessment_topic = assessment['topics'][rec_no]
+        topic_id = assessment_topic['topic_id']
+        
+        # Find the topic in the current topics list
+        topic_index = None
+        for i, topic in enumerate(topics):
+            if topic['topic_id'] == topic_id:
+                topic_index = i
+                break
+        
+        if topic_index is None:
+            continue
+        
+        # Update topic statistics
+        topic = topics[topic_index]
+        topic['attempts'] = topic.get('attempts', 0) + 1
+        topic['last_seen'] = datetime.now()
+        
+        if solved:
+            topic['successes'] = topic.get('successes', 0) + 1
+        
+        # Adjust base_score based on difficulty feedback
+        if difficulty in FLAG_SCORE_MAP:
+            target_score = FLAG_SCORE_MAP[difficulty]
+            current_score = topic['base_score']
+            score_difference = target_score - current_score
+            adjustment = score_difference * BASE_SCORE_ADJUSTMENT_RATIO
+            
+            # Apply adjustment with bounds
+            new_score = current_score + adjustment
+            topic['base_score'] = max(1, min(100, new_score))
+        
+        topics[topic_index] = topic
+    
+    # Save updated topics
+    user_data_manager.save_user_topics(user_id, topics)
+    
+    # Update user profile
+    profile = user_data_manager.load_user_profile(user_id)
+    profile['total_assessments'] = profile.get('total_assessments', 0) + 1
+    user_data_manager.save_user_profile(user_id, profile)
+    
+    # Clear current assessment
+    user_data_manager.clear_user_current_assessment(user_id)
+    
+    return "Assessment feedback processed successfully"
+
+# --------------------------- Helper Functions ----------------------------------
+
+def apply_filters(topics: List[dict], filters: Dict) -> List[dict]:
+    """Apply filters to topics list"""
+    filtered_topics = []
+    now = datetime.now()
+    
+    for topic in topics:
+        # Filter by added_in_last_days
+        if 'added_in_last_days' in filters and filters['added_in_last_days'] is not None:
+            days_since_added = (now - topic['date_added']).days
+            if days_since_added > filters['added_in_last_days']:
+                continue
+        
+        # Filter by not_asked_in_last_days
+        if 'not_asked_in_last_days' in filters and filters['not_asked_in_last_days'] is not None:
+            if topic.get('last_seen'):
+                days_since_last_seen = (now - topic['last_seen']).days
+                if days_since_last_seen < filters['not_asked_in_last_days']:
+                    continue
+        
+        # Filter by min_base_score
+        if 'min_base_score' in filters and filters['min_base_score'] is not None:
+            if topic['base_score'] < filters['min_base_score']:
+                continue
+        
+        # Filter by categories
+        if 'categories' in filters and filters['categories']:
+            if topic['category'] not in filters['categories']:
+                continue
+        
+        filtered_topics.append(topic)
+    
+    return filtered_topics
+
+def calculate_priority(topic: Dict, all_topics: List[Dict]) -> float:
+    """Calculate priority score for a topic"""
+    struggle_score = calculate_struggle_score(topic)
+    due_score = calculate_due_score(topic)
+    base_score = calculate_base_score(topic)
+    novelty_score = calculate_novelty_score(topic)
+    
+    priority = (
+        W_STRUGGLE * struggle_score +
+        W_DUE * due_score +
+        W_BASE * base_score +
+        W_NOVELTY * novelty_score
+    )
+    
+    return priority
+
+def calculate_struggle_score(topic: Dict) -> float:
+    """Calculate struggle score based on failure rate"""
+    attempts = topic.get('attempts', 0)
+    successes = topic.get('successes', 0)
+    
+    if attempts == 0:
+        return 0.5  # Neutral score for untested topics
+    
+    failure_rate = 1 - (successes / attempts)
+    # Higher failure rate = higher struggle score = higher priority
+    return min(failure_rate * 2, 1.0)
+
+def calculate_due_score(topic: Dict) -> float:
+    """Calculate due score based on spaced repetition"""
+    last_seen = topic.get('last_seen')
+    
+    if not last_seen:
+        return 1.0  # High priority for never-seen topics
+    
+    days_since_last_seen = (datetime.now() - last_seen).days
+    
+    # Calculate target interval based on success rate
+    attempts = topic.get('attempts', 0)
+    successes = topic.get('successes', 0)
+    success_rate = successes / attempts if attempts > 0 else 0
+    
+    # More successful topics can wait longer
+    interval_multiplier = max(1, success_rate * 3)
+    target_interval = BASE_INTERVAL_DAYS * interval_multiplier
+    
+    if days_since_last_seen >= target_interval:
+        # Topic is due or overdue
+        return min(days_since_last_seen / target_interval, 1.0)
+    else:
+        # Topic is not yet due
+        return (days_since_last_seen / target_interval) * 0.3
+
+def calculate_base_score(topic: Dict) -> float:
+    """Calculate priority based on base difficulty"""
+    # Higher difficulty = higher priority (more practice needed)
+    return topic['base_score'] / 100.0
+
+def calculate_novelty_score(topic: Dict) -> float:
+    """Calculate novelty score for recently added topics"""
+    days_since_added = (datetime.now() - topic['date_added']).days
+    
+    if days_since_added <= NEW_TOPIC_WINDOW_DAYS:
+        # Linear decay from 1.0 to 0.0 over the novelty window
+        return 1.0 - (days_since_added / NEW_TOPIC_WINDOW_DAYS)
+    
+    return 0.0
+
+def get_sort_value(topic: Dict, sort_by: str) -> float:
+    """Get the sort value for a topic based on sort criteria"""
+    if sort_by == 'success_rate':
+        return topic.get('success_rate', 0)
+    elif sort_by == 'attempt_count':
+        return topic.get('attempt_count', 0)
+    elif sort_by == 'base_score':
+        return topic['base_score']
+    elif sort_by == 'last_seen':
+        return topic.get('days_since_last_seen', 999)
+    elif sort_by == 'date_added':
+        return topic.get('days_since_added', 0)
+    return 0
 
 def _save_topics_data(topics_data: List[dict]):
     """Save topics data to JSON file."""
@@ -146,15 +489,6 @@ def _get_initial_topics_data() -> List[dict]:
         },
     ]
 
-def fetch_all_topics() -> List[dict]:
-    """Load topics from JSON file and return a copy."""
-    topics_data = _load_topics_data()
-    # Recalculate averages for safety
-    for t in topics_data:
-        t["rec_score_avg"] = sum(t["rec_scores"]) / len(t["rec_scores"]) if t["rec_scores"] else 50.0
-        t["base_score"] = float(t["base_score"]) # Ensure score is float
-    return [t.copy() for t in topics_data]
-
 def _persist_topic_update(topic_id: str, updates: dict):
     """Update a single topic and save to JSON file."""
     topics_data = _load_topics_data()
@@ -173,37 +507,6 @@ def _persist_recommendation_set(set_id: str, picked: List[dict]):
         for i, p in enumerate(picked, start=1)
     ]
     _save_recommendation_sets(recommendation_sets)
-
-# --------------------------- New: Add Topic Function --------------------------------------
-
-def add_new_topic(name: str, category: str, initial_difficulty: int) -> str:
-    """Adds a new topic to the JSON storage with user-provided initial difficulty."""
-    topics_data = _load_topics_data()
-    
-    # Simple ID generation
-    new_id_num = len(topics_data) + 1
-    new_id = f"t{new_id_num}"
-    
-    # Ensure score is within bounds [1, 100]
-    initial_difficulty = max(1, min(100, initial_difficulty))
-    
-    now = datetime.utcnow()
-    new_topic = {
-        "id": new_id,
-        "name": name,
-        "category": category,
-        "base_score": float(initial_difficulty), # initial difficulty is the base score
-        "date_added": now,
-        "last_seen": None,
-        "attempts": 0,
-        "successes": 0,
-        "rec_scores": [],
-        "rec_score_avg": 50.0 # Start with neutral average for due calculation
-    }
-    
-    topics_data.append(new_topic)
-    _save_topics_data(topics_data)
-    return f"Topic '{name}' (ID: {new_id}) added with initial difficulty: {initial_difficulty}/100."
 
 # --------------------------- Utility functions --------------------------------------------
 def days_since(dt: Optional[datetime], now: datetime) -> Optional[float]:
@@ -395,415 +698,6 @@ def filter_topics(topics: List[dict], filters: Dict = None) -> List[dict]:
     return filtered
 
 
-# --------------------------- Main API functions --------------------------------------------
-def get_recommendations(count: int, filters: Dict = None) -> List[str]:
-    """
-    Returns a list of JSON strings; each string is a recommendation.
-    
-    filters dict can contain:
-    - added_in_last_days: int - only topics added in last X days
-    - not_asked_in_last_days: int - only topics not asked in last X days  
-    - min_base_score: int - only topics with base_score >= X
-    - categories: List[str] - only topics from specified categories
-    """
-    now = datetime.utcnow()
-    topics = fetch_all_topics()
-    
-    # Apply filters before computing priorities
-    topics = filter_topics(topics, filters)
-    
-    if not topics:
-        return []  # No topics match the filters
-
-    # compute priorities
-    scored = []
-    for t in topics:
-        priority, breakdown = _compute_priority(t, now)
-        scored.append({
-            **t,
-            "priority": priority,
-            "breakdown": breakdown
-        })
-
-    # small epsilon to ensure non-zero where everything collapsed
-    EPS = 1e-6
-    for s in scored:
-        if s["priority"] <= 0:
-            s["priority"] = EPS
-
-    # weighted sampling without replacement with category diversity handling
-    picked = _weighted_sample_without_replacement(scored, count, category_key="category")
-
-    # create set_id and create rec ids
-    set_id = uuid.uuid4().hex
-    _persist_recommendation_set(set_id, picked) # Persist mapping
-
-    output = []
-    for i, p in enumerate(picked, start=1):
-        rec_id = f"{set_id}-{i}"
-        rec = {
-            "rec_id": rec_id,
-            "set_id": set_id,
-            "rec_no": i,
-            "topic_id": p["id"],
-            "topic_name": p["name"],
-            "category": p.get("category"),
-            "priority": round(p["priority"], 6),
-            "breakdown": p["breakdown"]
-        }
-        output.append(json.dumps(rec))
-    
-    # Save the last set ID to JSON file
-    _save_last_set_id(set_id)
-    
-    return output
-
-
-def flag_recommendation_set(
-    set_id: str,
-    feedback: List[Dict[str, str or bool or int]]
-) -> str:
-    """
-    Processes user feedback (easy/medium/hard and solved/unsolved) for a recommendation set.
-    """
-    recommendation_sets = _load_recommendation_sets()
-    if set_id not in recommendation_sets:
-        return f"Error: Recommendation set ID '{set_id}' not found."
-
-    set_mapping = recommendation_sets[set_id]
-    
-    # 1. Map rec_no to topic_id
-    rec_to_topic = {int(m["rec_id"].split('-')[-1]): m["topic_id"] for m in set_mapping}
-
-    topics_data = _load_topics_data()
-    
-    for item in feedback:
-        rec_no = item.get('rec_no')
-        difficulty = item.get('difficulty', '').lower()
-        solved = item.get('solved', False)
-
-        if rec_no not in rec_to_topic or difficulty not in FLAG_SCORE_MAP:
-            continue
-
-        topic_id = rec_to_topic[rec_no]
-        flag_score = FLAG_SCORE_MAP[difficulty]
-        
-        # Get current topic data to apply changes
-        current_topic = next((t for t in topics_data if t["id"] == topic_id), None)
-        if not current_topic:
-            continue
-
-        updates = {}
-
-        # --- A. Update Attempts/Successes and last_seen ---
-        updates["attempts"] = current_topic.get("attempts", 0) + 1
-        if solved:
-            updates["successes"] = current_topic.get("successes", 0) + 1
-        updates["last_seen"] = datetime.utcnow()
-
-        # --- B. Update Base Score (Slight Adjustment) and Rec Score Avg ---
-        
-        # 1. Adjust base_score
-        current_base_score = current_topic.get("base_score", 50.0)
-        # Move base score slightly towards the flagged difficulty score
-        diff = flag_score - current_base_score
-        base_score_adjustment = diff * BASE_SCORE_ADJUSTMENT_RATIO
-        updates["base_score"] = round(max(1.0, min(100.0, current_base_score + base_score_adjustment)), 2)
-
-        # 2. Update rec_scores list and average
-        current_rec_scores = current_topic.get("rec_scores", [])
-        current_rec_scores.append(float(flag_score))
-        updates["rec_scores"] = current_rec_scores
-        updates["rec_score_avg"] = round(sum(current_rec_scores) / len(current_rec_scores), 2)
-        
-        # --- C. Persist Updates ---
-        _persist_topic_update(topic_id, updates)
-
-    return f"Successfully processed feedback for {len(feedback)} recommendations in set '{set_id}'. Topic data updated."
-
-
-# --------------------------- Advanced Filtering with Sorting -----------------------------------
-def get_sorted_recommendations(count: int, sort_by: str, sort_order: str = 'top') -> List[str]:
-    """
-    Get recommendations based on sorting criteria without priority calculations.
-    
-    Args:
-        count: Number of topics to return
-        sort_by: Sort criteria - 'success_rate', 'attempt_count', 'base_score', 'last_seen', 'date_added'
-        sort_order: 'top' for highest/most recent, 'bottom' for lowest/oldest
-    
-    Returns:
-        List of JSON strings representing recommendations
-    """
-    now = datetime.utcnow()
-    topics = fetch_all_topics()
-    
-    if not topics:
-        return []
-    
-    # Calculate success rate for each topic
-    for topic in topics:
-        attempts = topic.get('attempts', 0)
-        successes = topic.get('successes', 0)
-        topic['success_rate'] = (successes / attempts * 100) if attempts > 0 else 0
-        
-        # Calculate days since last seen for sorting
-        last_seen = topic.get('last_seen')
-        if last_seen:
-            topic['days_since_last_seen'] = days_since(last_seen, now) or 0
-        else:
-            topic['days_since_last_seen'] = 999999  # Never seen
-            
-        # Calculate days since added
-        date_added = topic.get('date_added', now)
-        topic['days_since_added'] = days_since(date_added, now) or 0
-    
-    # Sort based on criteria
-    reverse = sort_order == 'top'
-    
-    if sort_by == 'success_rate':
-        topics.sort(key=lambda x: x['success_rate'], reverse=reverse)
-    elif sort_by == 'attempt_count':
-        topics.sort(key=lambda x: x.get('attempts', 0), reverse=reverse)
-    elif sort_by == 'base_score':
-        topics.sort(key=lambda x: x.get('base_score', 50), reverse=reverse)
-    elif sort_by == 'last_seen':
-        # For last_seen, 'top' means most recently seen (smallest days_since_last_seen)
-        topics.sort(key=lambda x: x['days_since_last_seen'], reverse=not reverse)
-    elif sort_by == 'date_added':
-        # For date_added, 'top' means most recently added (smallest days_since_added)
-        topics.sort(key=lambda x: x['days_since_added'], reverse=not reverse)
-    else:
-        # Default to base_score if invalid sort_by
-        topics.sort(key=lambda x: x.get('base_score', 50), reverse=reverse)
-    
-    # Take the top/bottom count
-    selected_topics = topics[:count]
-    
-    # Create set_id and generate recommendations
-    set_id = uuid.uuid4().hex
-    _persist_recommendation_set(set_id, selected_topics)
-    
-    output = []
-    for i, topic in enumerate(selected_topics, start=1):
-        rec_id = f"{set_id}-{i}"
-        rec = {
-            "rec_id": rec_id,
-            "set_id": set_id,
-            "rec_no": i,
-            "topic_id": topic["id"],
-            "topic_name": topic["name"],
-            "category": topic.get("category"),
-            "base_score": topic.get("base_score", 50),
-            "success_rate": round(topic['success_rate'], 2),
-            "attempts": topic.get('attempts', 0),
-            "sort_criteria": f"{sort_by}_{sort_order}",
-            "sort_value": _get_sort_value(topic, sort_by)
-        }
-        output.append(json.dumps(rec))
-    
-    # Save the last set ID
-    _save_last_set_id(set_id)
-    
-    return output
-
-
-def _get_sort_value(topic: dict, sort_by: str) -> float:
-    """Get the actual value used for sorting for display purposes."""
-    if sort_by == 'success_rate':
-        return topic['success_rate']
-    elif sort_by == 'attempt_count':
-        return topic.get('attempts', 0)
-    elif sort_by == 'base_score':
-        return topic.get('base_score', 50)
-    elif sort_by == 'last_seen':
-        return topic['days_since_last_seen']
-    elif sort_by == 'date_added':
-        return topic['days_since_added']
-    else:
-        return 0
-
-
-# --------------------------- Interactive CLI (Demo) ------------------------------------------
-
-def print_topic_summary(topics: List[dict]):
-    """Prints a formatted table of core topic data."""
-    print("\n" + "="*95)
-    print(f"{'ID':<4} | {'Name':<25} | {'Cat':<10} | {'Base Score':<10} | {'Attempts/Suc.':<13} | {'Avg. Rec Score':<14}")
-    print("-" * 95)
-    for t in topics:
-        attempts = t.get("attempts", 0)
-        successes = t.get("successes", 0)
-        rec_score_avg = t.get("rec_score_avg", 50.0)
-        print(
-            f"{t['id']:<4} | {t['name']:<25} | {t['category']:<10} | {t['base_score']:<10.2f} | "
-            f"{attempts:>5}/{successes:<5} | {rec_score_avg:<14.2f}"
-        )
-    print("="*95 + "\n")
-
-def print_recommendation_details(recs_json: List[str]):
-    """Prints a formatted table of recommendation data."""
-    print("\n" + "="*120)
-    print("Recommendation Set Details:")
-    recs = [json.loads(r) for r in recs_json]
-    if not recs:
-        print("No recommendations generated.")
-        return
-    
-    print(f"Set ID: {recs[0]['set_id']}")
-    
-    print(f"{'Rec No':<6} | {'Topic ID':<8} | {'Topic Name':<20} | {'Category':<10} | {'Priority':<10} | {'Struggle':<10} | {'Due':<10} | {'Desired Int.':<12}")
-    print("-" * 120)
-    for r in recs:
-        breakdown = r['breakdown']
-        print(
-            f"{r['rec_no']:<6} | {r['topic_id']:<8} | {r['topic_name']:<20} | {r['category']:<10} | {r['priority']:<10.4f} | "
-            f"{breakdown['struggle_index']:<10.4f} | {breakdown['due_norm']:<10.4f} | {breakdown['desired_interval']:<12.2f}"
-        )
-    print("="*120 + "\n")
-
-
-def cli_generate_recs():
-    """CLI to generate and display recommendations."""
-    while True:
-        try:
-            count = int(input("Enter number of recommendations to generate (e.g., 4): "))
-            if count > 0:
-                break
-            print("Please enter a positive number.")
-        except ValueError:
-            print("Invalid input. Please enter a number.")
-    
-    recs = get_recommendations(count)
-    if not recs:
-        print("Could not generate any recommendations.")
-        return
-        
-    print_recommendation_details(recs)
-    last_set_id = _load_last_set_id()
-    print(f"Set ID '{last_set_id}' generated and stored for flagging.")
-
-
-def cli_flag_recs():
-    """CLI to simulate user flagging of the last generated set."""
-    last_set_id = _load_last_set_id()
-    if not last_set_id:
-        print("Please generate a recommendation set first.")
-        return
-
-    set_id = last_set_id
-    recommendation_sets = _load_recommendation_sets()
-    set_mapping = recommendation_sets.get(set_id)
-    if not set_mapping:
-        print(f"Error: No mapping found for set ID '{set_id}'.")
-        return
-
-    feedback_list = []
-    print(f"\nFlagging recommendations for Set ID: {last_set_id}")
-    
-    # Map rec_no to topic_name for display
-    rec_info = {
-        int(m["rec_id"].split('-')[-1]): m["topic_id"] for m in set_mapping
-    }
-    topic_map = {t["id"]: t["name"] for t in fetch_all_topics()}
-
-    for rec_no in sorted(rec_info.keys()):
-        topic_id = rec_info[rec_no]
-        topic_name = topic_map.get(topic_id, "Unknown Topic")
-        
-        while True:
-            difficulty_raw = input(f"Rec {rec_no} ({topic_name}) - Difficulty (E/M/H): ").lower()
-            if difficulty_raw.startswith('e'):
-                difficulty = 'easy'
-                break
-            elif difficulty_raw.startswith('m'):
-                difficulty = 'medium'
-                break
-            elif difficulty_raw.startswith('h'):
-                difficulty = 'hard'
-                break
-            else:
-                print("Invalid difficulty. Please enter E (Easy), M (Medium), or H (Hard).")
-
-        while True:
-            solved_raw = input(f"Rec {rec_no} ({topic_name}) - Solved (Y/N): ").lower()
-            if solved_raw.startswith('y'):
-                solved = True
-                break
-            elif solved_raw.startswith('n'):
-                solved = False
-                break
-            else:
-                print("Invalid input. Please enter Y (Yes) or N (No).")
-        
-        feedback_list.append({
-            'rec_no': rec_no,
-            'difficulty': difficulty,
-            'solved': solved
-        })
-        print("-" * 40)
-
-    if feedback_list:
-        status = flag_recommendation_set(set_id, feedback_list)
-        print(f"\nFlagging Status: {status}")
-        print("\nTOPIC DATA AFTER FLAGGING:")
-        print_topic_summary(fetch_all_topics())
-        
-        # Invalidate last set ID to prevent re-flagging
-        _save_last_set_id(None)
-        
-def cli_add_topic():
-    """CLI to add a new topic."""
-    name = input("Enter Topic Name: ")
-    category = input("Enter Topic Category (e.g., arrays, graphs): ")
-    
-    while True:
-        try:
-            difficulty = int(input("Enter Initial Difficulty (1-100, 100=Hardest): "))
-            if 1 <= difficulty <= 100:
-                break
-            print("Difficulty must be between 1 and 100.")
-        except ValueError:
-            print("Invalid input. Please enter a number.")
-            
-    status = add_new_topic(name, category, difficulty)
-    print(f"\n{status}")
-    print_topic_summary(fetch_all_topics())
-
-
-def cli_main():
-    """Main function for the interactive CLI."""
-    print("Welcome to the Recommendation Engine CLI.")
-    
-    while True:
-        print("\n--- Main Menu ---")
-        print("1. View Current Topic Data")
-        print("2. Generate Recommendations")
-        print("3. Add New Topic")
-        last_set_id = _load_last_set_id()
-        if last_set_id:
-            print(f"4. Flag Last Set ({last_set_id})")
-        else:
-            print("4. (Generate recommendations first to enable flagging)")
-        print("5. Exit")
-        
-        choice = input("Enter your choice (1-5): ")
-        
-        if choice == '1':
-            print_topic_summary(fetch_all_topics())
-        elif choice == '2':
-            cli_generate_recs()
-        elif choice == '3':
-            cli_add_topic()
-        elif choice == '4' and last_set_id:
-            cli_flag_recs()
-        elif choice == '5':
-            print("Exiting. Goodbye! 👋")
-            break
-        else:
-            print("Invalid choice. Please try again.")
-
-
 if __name__ == "__main__":
     random.seed(42)  # for deterministic demo run
-    cli_main()
+    print("Engine module loaded successfully")

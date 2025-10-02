@@ -60,7 +60,7 @@ const AddTopic: React.FC = () => {
       
       // Navigate back to dashboard after successful submission
       setTimeout(() => {
-        navigate('/');
+        navigate('/dashboard');
       }, 2000);
     } catch (error: any) {
       setError(error.response?.data?.error || 'Failed to add topic');

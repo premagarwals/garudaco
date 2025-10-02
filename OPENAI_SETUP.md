@@ -1,8 +1,52 @@
-# 🔑 Setting Up OpenRouter API for AI-Powered Questions
+# � Complete Setup Guide - Google OAuth & OpenRouter API
 
-## Quick Setup (Recommended)
+## Quick Setup Overview
 
-### Step 1: Get Your OpenRouter API Key
+This guide covers setting up both Google OAuth authentication and OpenRouter API for AI-powered question generation.
+
+## Part 1: Google OAuth Setup
+
+### 1. Access Google Cloud Console
+- Go to [Google Cloud Console](https://console.cloud.google.com/)
+- Sign in with your Google account
+
+### 2. Create or Select Project
+- **New Project**: Click "New Project" → Enter name → Create
+- **Existing Project**: Select from dropdown
+
+### 3. Enable Google Sign-In API
+- Navigate to **APIs & Services** → **Library**
+- Search for "Google Sign-In API" or "Google+ API"
+- Click **Enable**
+
+### 4. Create OAuth 2.0 Credentials
+- Go to **APIs & Services** → **Credentials**
+- Click **+ CREATE CREDENTIALS** → **OAuth client ID**
+- Select **Web application**
+
+### 5. Configure OAuth Settings
+
+**Application Name**: `Garudaco Learning Platform`
+
+**Authorized JavaScript Origins**:
+```
+http://localhost:3000
+```
+
+**Authorized Redirect URIs**:
+```
+http://localhost:3000
+http://localhost:3000/login
+```
+
+### 6. Get Your Credentials
+After creating, you'll receive:
+- **Client ID**: `1234567890-abcdefghijklmnop.apps.googleusercontent.com`
+- **Client Secret**: `GOCSPX-abcdefghijklmnopqrstuvwx`
+
+## Part 2: OpenRouter API Setup
+
+### 1. Get Your OpenRouter API Key
 
 1. **Visit OpenRouter:**
    - Go to https://openrouter.ai/
@@ -17,37 +61,196 @@
    - Click "Create Key"
    - Copy the key (starts with `sk-or-v1-`)
 
-### Step 2: Configure Your Environment
-
-1. **Open the `.env` file:**
-   ```bash
-   # Navigate to the project root directory
-   cd garudaco
-   
-   # Edit the .env file (in the same directory as docker-compose.yml)
-   nano .env  # or use your preferred editor
-   ```
-
-2. **Update the configuration:**
-   ```bash
-   # Replace with your actual OpenRouter API key
-   OPENAI_API_KEY=sk-or-v1-your_actual_key_here
-   
-   # Choose your preferred model (see options below)
-   API_MODEL=deepseek/deepseek-chat-v3.1:free
-   ```
-
-### Step 3: Choose Your AI Model
+### 2. Choose Your AI Model
 
 Popular free models available:
 ```bash
 # Free Models (Recommended for testing)
 API_MODEL=deepseek/deepseek-chat-v3.1:free
 API_MODEL=microsoft/phi-3-mini-128k-instruct:free
-API_MODEL=meta-llama/llama-3.1-8b-instruct:free
+## Complete Verification Checklist
 
-# Paid Models (Higher quality, costs credits)
-API_MODEL=anthropic/claude-3.5-sonnet
+### Google OAuth Setup
+- [ ] Google Cloud project created
+- [ ] Google Sign-In API enabled
+- [ ] OAuth client ID created
+- [ ] Authorized origins configured (`http://localhost:3000`)
+- [ ] Redirect URIs configured
+- [ ] Client ID added to root `.env`
+- [ ] Client Secret added to root `.env`
+- [ ] Client ID added to `frontend/.env`
+
+### OpenRouter API Setup
+- [ ] OpenRouter account created
+- [ ] API key generated
+- [ ] API key added to root `.env`
+- [ ] Model selected and configured
+- [ ] Free credits available or billing set up
+
+### Application Testing
+- [ ] Containers restarted after configuration
+- [ ] Can access http://localhost:3000
+- [ ] Google Sign-In button appears
+- [ ] Login flow completes successfully
+- [ ] Dashboard loads after authentication
+- [ ] Can add topics successfully
+- [ ] Can generate assessments successfully
+- [ ] Questions are generated with AI
+
+---
+
+🎉 **Congratulations!** Your Garudaco learning platform is fully configured and ready for production use.
+
+## Quick Commands Reference
+
+```bash
+# Start application
+docker-compose up --build
+
+# Stop application
+docker-compose down
+
+# View logs
+docker logs garudaco-backend
+docker logs garudaco-frontend
+
+# Check container status
+docker ps
+```
+
+## Need Help?
+
+If you encounter any issues:
+1. Check the troubleshooting sections above
+2. Verify all environment variables are set correctly
+3. Ensure containers are running properly
+4. Check browser console for frontend errors
+5. Review backend logs for API issues
+```
+
+## Part 3: Environment Configuration
+
+### 1. Update Root `.env` File
+
+Create or update the `.env` file in the project root:
+
+```env
+# OpenRouter API Configuration
+OPENAI_API_KEY=sk-or-v1-your_actual_key_here
+API_MODEL=deepseek/deepseek-chat-v3.1:free
+
+# Google OAuth Configuration
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# JWT Configuration
+JWT_SECRET=your-super-secret-jwt-key-minimum-32-characters
+```
+
+### 2. Update Frontend `.env` File
+
+Create `frontend/.env`:
+
+```env
+# Google OAuth for Frontend
+REACT_APP_GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+
+# Backend API URL
+REACT_APP_API_URL=http://localhost:5000/api
+```
+
+## Part 4: Testing Your Setup
+
+1. **Restart Containers**:
+   ```bash
+   docker-compose down
+   docker-compose up --build
+   ```
+
+2. **Test Authentication**:
+   - Open http://localhost:3000
+   - Click "Sign in with Google"
+   - Complete OAuth flow
+   - Should redirect to dashboard
+
+3. **Test AI Generation**:
+   - Add a topic in the dashboard
+   - Generate an assessment
+   - Verify questions are generated successfully
+
+## Production Deployment
+
+### For Production Domain
+When deploying to production (e.g., `https://yourdomain.com`):
+
+**Update Google OAuth Settings**:
+```
+Authorized Origins: https://yourdomain.com
+Redirect URIs: https://yourdomain.com, https://yourdomain.com/login
+```
+
+**Update Environment**:
+```env
+REACT_APP_API_URL=https://yourdomain.com/api
+```
+
+## Security Best Practices
+
+### ✅ Do's
+- ✅ Use HTTPS in production
+- ✅ Keep Client Secret secure (server-side only)
+- ✅ Regularly rotate JWT secrets
+- ✅ Monitor API usage and costs
+- ✅ Set up rate limiting
+
+### ❌ Don'ts
+- ❌ Never expose secrets in frontend
+- ❌ Don't use HTTP in production
+- ❌ Don't commit secrets to version control
+- ❌ Don't skip domain validation
+
+## Troubleshooting
+
+### Google OAuth Issues
+
+**Error: "Invalid OAuth Client"**
+- Verify Client ID in both `.env` files
+- Check that IDs match exactly
+
+**Error: "Redirect URI Mismatch"**
+- Add exact URL to Google Console
+- No trailing slashes in URLs
+
+**Sign-In Button Not Appearing**
+- Check browser console for errors
+- Verify network connectivity
+- Clear browser cache
+
+### OpenRouter API Issues
+
+**"Invalid API key"**
+- Double-check your API key is correct
+- Ensure no extra spaces or characters
+
+**"Model not found"**
+- Verify the model name is exactly as shown
+- Check if model is available
+
+**"Rate limit exceeded"**
+- Wait a few minutes before trying again
+- Consider using a different model
+
+## Cost Management
+
+### OpenRouter Usage
+- Monitor usage on OpenRouter dashboard
+- Start with free models for development
+- Set up billing alerts for paid models
+- Optimize prompts to reduce token usage
+
+### Rate Limits
+- **Free models**: Usually 10-20 requests per minute
+- **Paid models**: Higher limits based on usage tier
 API_MODEL=openai/gpt-4
 API_MODEL=google/gemini-pro-1.5
 ```

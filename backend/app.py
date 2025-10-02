@@ -6,20 +6,26 @@ import requests
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+from auth import AuthManager, require_auth
+from user_manager import UserDataManager
 from engine import (
     get_recommendations, 
     flag_recommendation_set, 
     fetch_all_topics, 
-    add_new_topic,
-    _load_recommendation_sets,
-    _load_last_set_id
+    add_new_topic
 )
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=['http://localhost:3000', 'http://localhost'], 
+     allow_headers=['Content-Type', 'Authorization'],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
+
+# Initialize managers
+auth_manager = AuthManager()
+user_data_manager = UserDataManager()
 
 # OpenRouter API Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your-api-key-here')
@@ -138,6 +144,108 @@ def extract_category_from_prompt(prompt):
     else:
         return "Programming"
 
+# ======================== Authentication Endpoints ========================
+
+@app.route('/api/auth/google', methods=['POST'])
+def google_auth():
+    """Authenticate user with Google OAuth token"""
+    data = request.get_json()
+    token = data.get('token')
+    
+    if not token:
+        return jsonify({'error': 'Token is required'}), 400
+    
+    try:
+        user_info = auth_manager.verify_google_token(token)
+        
+        if user_info:
+            # Generate JWT token for the user
+            jwt_token = auth_manager.generate_token(user_info['sub'])
+            
+            # Initialize user data if first time
+            user_data_manager.ensure_user_directory(user_info['sub'])
+            
+            return jsonify({
+                'token': jwt_token,
+                'user': {
+                    'id': user_info['sub'],
+                    'email': user_info['email'],
+                    'name': user_info['name'],
+                    'picture': user_info.get('picture', '')
+                }
+            })
+        else:
+            return jsonify({'error': 'Invalid token'}), 401
+    except Exception as e:
+        print(f"Authentication error: {e}")
+        return jsonify({'error': f'Authentication failed: {str(e)}'}), 500
+
+@app.route('/api/auth/verify', methods=['GET'])
+@require_auth
+def verify_token():
+    """Verify if the current token is valid"""
+    user_id = request.user_id  # Set by require_auth decorator
+    
+    # Return user profile if exists
+    try:
+        profile = user_data_manager.load_user_profile(user_id)
+        return jsonify({
+            'valid': True,
+            'user_id': user_id,
+            'profile': profile
+        })
+    except:
+        return jsonify({
+            'valid': True,
+            'user_id': user_id,
+            'profile': None
+        })
+
+@app.route('/api/auth/logout', methods=['POST'])
+@require_auth
+def logout():
+    """Logout user (client should remove token)"""
+    return jsonify({'message': 'Logged out successfully'})
+
+# ======================== User Profile Endpoints ========================
+
+@app.route('/api/profile', methods=['GET'])
+@require_auth
+def get_profile():
+    """Get user profile"""
+    user_id = request.user_id
+    
+    try:
+        profile = user_data_manager.load_user_profile(user_id)
+        return jsonify(profile)
+    except:
+        # Return default profile if none exists
+        return jsonify({
+            'preferences': {
+                'default_difficulty': 50,
+                'preferred_categories': [],
+                'question_types': ['mcq', 'code', 'blank']
+            },
+            'stats': {
+                'total_assessments': 0,
+                'total_topics': 0,
+                'avg_success_rate': 0
+            }
+        })
+
+@app.route('/api/profile', methods=['PUT'])
+@require_auth
+def update_profile():
+    """Update user profile"""
+    user_id = request.user_id
+    data = request.get_json()
+    
+    try:
+        user_data_manager.save_user_profile(user_id, data)
+        return jsonify({'message': 'Profile updated successfully'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to update profile: {str(e)}'}), 500
+
 def generate_mcq_question(topic_name, category, difficulty):
     """Generate MCQ question for a topic"""
     prompt = f"""Generate a multiple choice question about {topic_name} in the {category} category. 
@@ -218,81 +326,133 @@ SUGGESTIONS: [Specific suggestions for improvement if any]"""
     
     return call_openai_api(prompt, temperature=0.3)
 
-@app.route('/api/topics', methods=['GET'])
-def get_topics():
-    """Get all topics with stats"""
-    topics = fetch_all_topics()
-    
-    # Add computed stats
-    for topic in topics:
-        attempts = topic.get('attempts', 0)
-        successes = topic.get('successes', 0)
-        success_rate = (successes / attempts * 100) if attempts > 0 else 0
-        
-        topic['success_rate'] = round(success_rate, 1)
-        
-        # Handle last_seen date formatting
-        last_seen = topic.get('last_seen')
-        if last_seen:
-            if isinstance(last_seen, str):
-                try:
-                    last_seen_dt = datetime.fromisoformat(last_seen)
-                    topic['last_seen_formatted'] = last_seen_dt.strftime('%Y-%m-%d')
-                except:
-                    topic['last_seen_formatted'] = 'Invalid Date'
-            else:
-                topic['last_seen_formatted'] = last_seen.strftime('%Y-%m-%d')
-        else:
-            topic['last_seen_formatted'] = 'Never'
-            
-        # Handle date_added formatting
-        date_added = topic.get('date_added')
-        if date_added:
-            if isinstance(date_added, str):
-                try:
-                    date_added_dt = datetime.fromisoformat(date_added)
-                    topic['date_added_formatted'] = date_added_dt.strftime('%Y-%m-%d')
-                except:
-                    topic['date_added_formatted'] = 'Invalid Date'
-            else:
-                topic['date_added_formatted'] = date_added.strftime('%Y-%m-%d')
-        else:
-            topic['date_added_formatted'] = ''
-    
-    return jsonify(topics)
+# ======================== Topic Management Endpoints ========================
 
-@app.route('/api/topics', methods=['POST'])
-def add_topic():
-    """Add a new topic"""
-    data = request.get_json()
-    name = data.get('name', '').strip()
-    category = data.get('category', '').strip()
-    difficulty = data.get('difficulty', 50)
-    
-    if not name or not category:
-        return jsonify({'error': 'Name and category are required'}), 400
+@app.route('/api/topics', methods=['GET'])
+@require_auth
+def get_topics():
+    """Get all topics for the authenticated user"""
+    user_id = request.user_id
     
     try:
-        difficulty = int(difficulty)
-        if not (1 <= difficulty <= 100):
-            return jsonify({'error': 'Difficulty must be between 1 and 100'}), 400
-    except ValueError:
-        return jsonify({'error': 'Difficulty must be a number'}), 400
+        # Parse query parameters
+        sort_by = request.args.get('sort_by', 'priority')
+        sort_order = request.args.get('sort_order', 'desc')
+        category_filter = request.args.get('category')
+        
+        # Build filters
+        filters = {}
+        if category_filter:
+            filters['categories'] = [category_filter]
+        
+        # Optional date filters
+        if request.args.get('added_in_last_days'):
+            try:
+                filters['added_in_last_days'] = int(request.args.get('added_in_last_days'))
+            except ValueError:
+                pass
+        
+        if request.args.get('not_asked_in_last_days'):
+            try:
+                filters['not_asked_in_last_days'] = int(request.args.get('not_asked_in_last_days'))
+            except ValueError:
+                pass
+        
+        if request.args.get('min_base_score'):
+            try:
+                filters['min_base_score'] = float(request.args.get('min_base_score'))
+            except ValueError:
+                pass
+        
+        # Fetch topics
+        topics = fetch_all_topics(user_id, sort_by=sort_by, sort_order=sort_order, filters=filters)
+        
+        # Add computed fields for frontend
+        for topic in topics:
+            attempts = topic.get('attempts', 0)
+            successes = topic.get('successes', 0)
+            topic['success_rate'] = round((successes / attempts * 100) if attempts > 0 else 0, 1)
+            topic['attempt_count'] = attempts
+            
+            # Format dates
+            last_seen = topic.get('last_seen')
+            if last_seen:
+                if isinstance(last_seen, str):
+                    try:
+                        last_seen_dt = datetime.fromisoformat(last_seen)
+                        topic['last_seen_formatted'] = last_seen_dt.strftime('%Y-%m-%d')
+                        topic['days_since_last_seen'] = (datetime.now() - last_seen_dt).days
+                    except:
+                        topic['last_seen_formatted'] = 'Invalid Date'
+                        topic['days_since_last_seen'] = 999
+                else:
+                    topic['last_seen_formatted'] = last_seen.strftime('%Y-%m-%d')
+                    topic['days_since_last_seen'] = (datetime.now() - last_seen).days
+            else:
+                topic['last_seen_formatted'] = 'Never'
+                topic['days_since_last_seen'] = 999
+            
+            date_added = topic.get('date_added')
+            if date_added:
+                if isinstance(date_added, str):
+                    try:
+                        date_added_dt = datetime.fromisoformat(date_added)
+                        topic['date_added_formatted'] = date_added_dt.strftime('%Y-%m-%d')
+                        topic['days_since_added'] = (datetime.now() - date_added_dt).days
+                    except:
+                        topic['date_added_formatted'] = 'Invalid Date'
+                        topic['days_since_added'] = 0
+                else:
+                    topic['date_added_formatted'] = date_added.strftime('%Y-%m-%d')
+                    topic['days_since_added'] = (datetime.now() - date_added).days
+            else:
+                topic['date_added_formatted'] = ''
+                topic['days_since_added'] = 0
+        
+        return jsonify(topics)
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch topics: {str(e)}'}), 500
+
+@app.route('/api/topics', methods=['POST'])
+@require_auth
+def add_topic():
+    """Add a new topic for the authenticated user"""
+    user_id = request.user_id
+    data = request.get_json()
     
-    result = add_new_topic(name, category, difficulty)
-    return jsonify({'message': result})
+    topic_name = data.get('topic_name')
+    category = data.get('category')
+    base_score = data.get('base_score', 50)
+    
+    if not topic_name or not category:
+        return jsonify({'error': 'Topic name and category are required'}), 400
+    
+    try:
+        topic_id = add_new_topic(user_id, topic_name, category, base_score)
+        return jsonify({'message': 'Topic added successfully', 'topic_id': topic_id})
+    except Exception as e:
+        return jsonify({'error': f'Failed to add topic: {str(e)}'}), 500
 
 @app.route('/api/categories', methods=['GET'])
+@require_auth
 def get_categories():
-    """Get all unique categories from topics"""
-    topics = fetch_all_topics()
-    categories = list(set(topic.get('category', '').strip() for topic in topics if topic.get('category', '').strip()))
-    categories.sort()  # Sort alphabetically
-    return jsonify(categories)
+    """Get unique categories for the authenticated user"""
+    user_id = request.user_id
+    
+    try:
+        topics = user_data_manager.load_user_topics(user_id)
+        categories = list(set(topic.get('category', 'Unknown') for topic in topics))
+        return jsonify(sorted(categories))
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch categories: {str(e)}'}), 500
+
+# ======================== Assessment Endpoints ========================
 
 @app.route('/api/generate-assessment', methods=['POST'])
+@require_auth
 def generate_assessment():
-    """Generate assessment questions based on filters"""
+    """Generate assessment questions based on filters for the authenticated user"""
+    user_id = request.user_id
     data = request.get_json()
     count = data.get('count', 3)
     
@@ -331,7 +491,7 @@ def generate_assessment():
     
     # Get recommendations from engine with filters
     try:
-        recommendations = get_recommendations(count, filters if filters else None)
+        recommendations = get_recommendations(user_id, count, filters if filters else None)
         if not recommendations:
             if filters:
                 return jsonify({'error': 'No topics match the specified filters'}), 400
@@ -413,7 +573,7 @@ def generate_assessment_advanced():
     # Get sorted recommendations from engine
     try:
         from engine import get_sorted_recommendations
-        recommendations = get_sorted_recommendations(count, sort_by, sort_order)
+        recommendations = get_sorted_recommendations(user_id, count, sort_by, sort_order)
         
         if not recommendations:
             return jsonify({'error': 'No topics available for assessment'}), 400
@@ -473,8 +633,10 @@ def generate_assessment_advanced():
         return jsonify({'error': f'Failed to generate advanced assessment: {str(e)}'}), 500
 
 @app.route('/api/verify-code', methods=['POST'])
+@require_auth
 def verify_code():
     """Verify user's code solution"""
+    user_id = request.user_id
     data = request.get_json()
     question = data.get('question', '')
     user_code = data.get('code', '')
@@ -489,8 +651,10 @@ def verify_code():
         return jsonify({'error': f'Failed to verify code: {str(e)}'}), 500
 
 @app.route('/api/submit-assessment', methods=['POST'])
+@require_auth
 def submit_assessment():
-    """Submit assessment results and update topic scores"""
+    """Submit assessment results and update topic scores for the authenticated user"""
+    user_id = request.user_id
     data = request.get_json()
     set_id = data.get('set_id')
     results = data.get('results', [])
@@ -508,96 +672,107 @@ def submit_assessment():
         })
     
     try:
-        status = flag_recommendation_set(set_id, feedback)
+        status = flag_recommendation_set(user_id, set_id, feedback)
         return jsonify({'message': status})
     except Exception as e:
         return jsonify({'error': f'Failed to submit assessment: {str(e)}'}), 500
 
 @app.route('/api/stats', methods=['GET'])
+@require_auth
 def get_stats():
-    """Get comprehensive stats"""
-    topics = fetch_all_topics()
-    recommendation_sets = _load_recommendation_sets()
+    """Get comprehensive stats for the authenticated user"""
+    user_id = request.user_id
     
-    # Add computed stats to topics for the stats page
-    for topic in topics:
-        attempts = topic.get('attempts', 0)
-        successes = topic.get('successes', 0)
-        success_rate = (successes / attempts * 100) if attempts > 0 else 0
-        topic['success_rate'] = round(success_rate, 1)
+    try:
+        topics = fetch_all_topics(user_id)
         
+        # Add computed stats to topics for the stats page
+        for topic in topics:
+            attempts = topic.get('attempts', 0)
+            successes = topic.get('successes', 0)
+            success_rate = (successes / attempts * 100) if attempts > 0 else 0
+            topic['success_rate'] = round(success_rate, 1)
         # Handle last_seen date formatting
-        last_seen = topic.get('last_seen')
-        if last_seen:
-            if isinstance(last_seen, str):
-                try:
-                    last_seen_dt = datetime.fromisoformat(last_seen)
-                    topic['last_seen_formatted'] = last_seen_dt.strftime('%Y-%m-%d')
-                except:
-                    topic['last_seen_formatted'] = 'Invalid Date'
+        for topic in topics:
+            last_seen = topic.get('last_seen')
+            if last_seen:
+                if isinstance(last_seen, str):
+                    try:
+                        last_seen_dt = datetime.fromisoformat(last_seen)
+                        topic['last_seen_formatted'] = last_seen_dt.strftime('%Y-%m-%d')
+                    except:
+                        topic['last_seen_formatted'] = 'Invalid Date'
+                else:
+                    topic['last_seen_formatted'] = last_seen.strftime('%Y-%m-%d')
             else:
-                topic['last_seen_formatted'] = last_seen.strftime('%Y-%m-%d')
-        else:
-            topic['last_seen_formatted'] = 'Never'
-    
-    # Overall stats
-    total_topics = len(topics)
-    total_attempts = sum(t.get('attempts', 0) for t in topics)
-    total_successes = sum(t.get('successes', 0) for t in topics)
-    overall_success_rate = (total_successes / total_attempts * 100) if total_attempts > 0 else 0
-    
-    # Category stats
-    categories = {}
-    for topic in topics:
-        cat = topic.get('category', 'Unknown')
-        if cat not in categories:
-            categories[cat] = {
-                'count': 0,
-                'attempts': 0,
-                'successes': 0,
-                'avg_difficulty': 0
-            }
-        categories[cat]['count'] += 1
-        categories[cat]['attempts'] += topic.get('attempts', 0)
-        categories[cat]['successes'] += topic.get('successes', 0)
-        categories[cat]['avg_difficulty'] += topic.get('base_score', 50)
-    
-    for cat_data in categories.values():
-        if cat_data['count'] > 0:
-            cat_data['avg_difficulty'] = round(cat_data['avg_difficulty'] / cat_data['count'], 1)
-            cat_data['success_rate'] = round(
-                (cat_data['successes'] / cat_data['attempts'] * 100) if cat_data['attempts'] > 0 else 0, 1
-            )
-    
-    return jsonify({
-        'overall': {
-            'total_topics': total_topics,
-            'total_attempts': total_attempts,
-            'total_successes': total_successes,
-            'success_rate': round(overall_success_rate, 1),
-            'total_sets': len(recommendation_sets)
-        },
-        'categories': categories,
-        'topics': topics
-    })
+                topic['last_seen_formatted'] = 'Never'
+        
+        # Overall stats
+        total_topics = len(topics)
+        total_attempts = sum(t.get('attempts', 0) for t in topics)
+        total_successes = sum(t.get('successes', 0) for t in topics)
+        overall_success_rate = (total_successes / total_attempts * 100) if total_attempts > 0 else 0
+        
+        # Category stats
+        categories = {}
+        for topic in topics:
+            cat = topic.get('category', 'Unknown')
+            if cat not in categories:
+                categories[cat] = {
+                    'count': 0,
+                    'attempts': 0,
+                    'successes': 0,
+                    'avg_difficulty': 0
+                }
+            categories[cat]['count'] += 1
+            categories[cat]['attempts'] += topic.get('attempts', 0)
+            categories[cat]['successes'] += topic.get('successes', 0)
+            categories[cat]['avg_difficulty'] += topic.get('base_score', 50)
+        
+        for cat_data in categories.values():
+            if cat_data['count'] > 0:
+                cat_data['avg_difficulty'] = round(cat_data['avg_difficulty'] / cat_data['count'], 1)
+                cat_data['success_rate'] = round(
+                    (cat_data['successes'] / cat_data['attempts'] * 100) if cat_data['attempts'] > 0 else 0, 1
+                )
+        
+        return jsonify({
+            'overall': {
+                'total_topics': total_topics,
+                'total_attempts': total_attempts,
+                'total_successes': total_successes,
+                'success_rate': round(overall_success_rate, 1),
+                'total_sets': 0  # No longer tracking sets
+            },
+            'categories': categories,
+            'topics': topics
+        })
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch stats: {str(e)}'}), 500
 
 @app.route('/api/assessment-history', methods=['GET'])
+@require_auth
 def get_assessment_history():
-    """Get assessment history"""
-    recommendation_sets = _load_recommendation_sets()
+    """Get assessment history for the authenticated user"""
+    user_id = request.user_id
     
-    # For now, return basic set information
-    # In a full implementation, you'd store more detailed assessment results
-    history = []
-    for set_id, topics in recommendation_sets.items():
-        history.append({
-            'set_id': set_id,
-            'topic_count': len(topics),
-            'topics': [t['topic_id'] for t in topics],
-            'date': 'Unknown'  # You'd store this when creating sets
-        })
-    
-    return jsonify(history)
+    try:
+        # Get current assessment if exists
+        current_assessment = user_data_manager.load_user_current_assessment(user_id)
+        
+        history = []
+        if current_assessment:
+            history.append({
+                'set_id': current_assessment.get('set_id', 'current'),
+                'topic_count': len(current_assessment.get('topics', [])),
+                'topics': [t.get('topic_name', 'Unknown') for t in current_assessment.get('topics', [])],
+                'date': current_assessment.get('created_at', 'Unknown'),
+                'status': 'current'
+            })
+        
+        return jsonify(history)
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch assessment history: {str(e)}'}), 500
 
 if __name__ == '__main__':
     # Configuration for Docker deployment
