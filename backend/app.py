@@ -365,7 +365,21 @@ def get_topics():
                 pass
         
         # Fetch topics
-        topics = fetch_all_topics(user_id, sort_by=sort_by, sort_order=sort_order, filters=filters)
+        topics = fetch_all_topics(user_id)
+        
+        # Apply filters manually since fetch_all_topics doesn't support them
+        if category_filter:
+            topics = [t for t in topics if t.get('category', '').lower() == category_filter.lower()]
+        
+        # Apply sorting
+        if sort_by == 'topic_name':
+            topics.sort(key=lambda x: x.get('topic_name', ''), reverse=(sort_order == 'desc'))
+        elif sort_by == 'date_added':
+            topics.sort(key=lambda x: x.get('date_added', datetime.min), reverse=(sort_order == 'desc'))
+        elif sort_by == 'success_rate':
+            topics.sort(key=lambda x: (x.get('successes', 0) / max(x.get('attempts', 1), 1)), reverse=(sort_order == 'desc'))
+        elif sort_by == 'attempts':
+            topics.sort(key=lambda x: x.get('attempts', 0), reverse=(sort_order == 'desc'))
         
         # Add computed fields for frontend
         for topic in topics:
@@ -373,6 +387,13 @@ def get_topics():
             successes = topic.get('successes', 0)
             topic['success_rate'] = round((successes / attempts * 100) if attempts > 0 else 0, 1)
             topic['attempt_count'] = attempts
+            
+            # Map topic_name to name for frontend compatibility
+            if 'topic_name' in topic:
+                topic['name'] = topic['topic_name']
+            # Map topic_id to id for frontend compatibility  
+            if 'topic_id' in topic:
+                topic['id'] = topic['topic_id']
             
             # Format dates
             last_seen = topic.get('last_seen')
@@ -428,8 +449,8 @@ def add_topic():
         return jsonify({'error': 'Topic name and category are required'}), 400
     
     try:
-        topic_id = add_new_topic(user_id, topic_name, category, base_score)
-        return jsonify({'message': 'Topic added successfully', 'topic_id': topic_id})
+        result = add_new_topic(user_id, topic_name, category, base_score)
+        return jsonify({'message': 'Topic added successfully', 'topic_id': result})
     except Exception as e:
         return jsonify({'error': f'Failed to add topic: {str(e)}'}), 500
 
@@ -692,6 +713,13 @@ def get_stats():
             successes = topic.get('successes', 0)
             success_rate = (successes / attempts * 100) if attempts > 0 else 0
             topic['success_rate'] = round(success_rate, 1)
+            
+            # Map topic_name to name for frontend compatibility
+            if 'topic_name' in topic:
+                topic['name'] = topic['topic_name']
+            # Map topic_id to id for frontend compatibility  
+            if 'topic_id' in topic:
+                topic['id'] = topic['topic_id']
         # Handle last_seen date formatting
         for topic in topics:
             last_seen = topic.get('last_seen')

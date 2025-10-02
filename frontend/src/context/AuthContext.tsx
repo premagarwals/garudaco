@@ -57,6 +57,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       await authService.logout();
       setUser(null);
+      
+      // Reset Google Sign-In state if available
+      if (window.google && window.google.accounts) {
+        window.google.accounts.id.disableAutoSelect();
+      }
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
